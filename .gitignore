@@ -1,0 +1,17 @@
+# Ignore Python bytecode files
+*.pyc
+__pycache__/
+
+# Ignore folders
+checkpoints/
+results/
+data/
+data_HGG/
+optuna/
+
+# Ignore ipynb files
+*.ipynb
+
+# Ignore specific files
+load_data.py
+long_running_task.py
