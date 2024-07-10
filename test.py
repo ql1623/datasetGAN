@@ -1,0 +1,83 @@
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+
+import numpy as np
+import scipy.io as scio
+import time
+import datetime
+from tqdm import tqdm
+from torch.autograd import Variable
+import torch.autograd as autograd
+
+from collections import OrderedDict
+
+from dataset import MRI_dataset
+
+from utils.config_reader import Config
+# from train_options import Options
+import train_options as config
+from utils.util import *
+
+# import model.generator as models
+
+def print_model_structure(module, indent=0):
+    print(' ' * indent + f'{module.__class__.__name__}')
+    for name, child in module.named_children():
+        print(' ' * (indent + 2) + f'{name}: {child.__class__.__name__}')
+        print_model_structure(child, indent + 4)
+        
+        
+if __name__ == "__main__":
+    net_layer = config.NUM_LAYERS
+    num_features = config.NUM_FEATURES
+    print(f"Model architecture is {net_layer} layers, with {num_features} intiial feature channels")
+    if net_layer == 4:
+        import model.generator_unet4 as models
+    if net_layer == 3:
+        import model.generator_unet3 as models   
+        
+    gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features).to(config.DEVICE)
+    # summary(gen, (2, 128, 128))
+    disc = models.Discriminator(in_channels=1, features=[32,64,128,256,512]).to(config.DEVICE)
+    
+    opt_gen = optim.Adam(gen.parameters(), lr=config.LEARNING_RATE, betas=(config.B1, config.B2))  
+    opt_disc = optim.Adam(disc.parameters(), lr=config.LEARNING_RATE, betas=(config.B1, config.B2)) 
+    
+    epoch_to_load = 200
+    gen, opt_gen = load_checkpoint(gen, opt_gen, config.LEARNING_RATE, config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, epoch_to_load, gen=True)
+    disc, opt_disc = load_checkpoint(disc, opt_disc, config.LEARNING_RATE, config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, epoch_to_load, gen=False)
+    
+    test_dataset = MRI_dataset(config, transform=None, train=False, test=True)
+    test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
+    
+    run_id = datetime.datetime.now().strftime("run_%d-%m-%Y_%H-%M-%S")
+    save_config(config, run_id, config.SAVE_RESULTS_PATH, config.MODALITY_DIRECTION, train=False)
+    
+    for index, images in enumerate(test_loader):
+        
+        image_A, image_B, real_target_C = get_data_for_task(images, config.MODALITY_DIRECTION)
+        image_A, image_B, real_target_C = image_A.to(config.DEVICE), image_B.to(config.DEVICE), real_target_C.to(config.DEVICE)
+        
+        x_concat = torch.cat((image_A, image_B), dim=1)
+        
+        with torch.no_grad():
+            pred_target, pred_image_A_recon, pred_image_B_recon = gen(x_concat)
+            
+            pred_images_C, real_images_C = patches_to_images(pred_target, real_target_C, [160,200], [2,2])
+            real_images_A, real_images_B = patches_to_images(image_A, image_B, [160,200], [2,2])
+            
+            # import pdb; pdb.set_trace()
+            avg_ssim, avg_psnr, avg_mse = evaluate_images(pred_images_C, real_images_C, run_id, index, config.SAVE_RESULTS_PATH, config.MODALITY_DIRECTION) 
+            
+            print("[" + f"Batch {index+1}: MSE: {avg_mse:.6f} | SSIM: {avg_ssim:.6f} | PSNR: {avg_psnr:.6f}" + "]")
+        
+        save_results(index, real_images_A, real_images_B, pred_images_C, real_images_C, config.SAVE_RESULTS_PATH, config.MODALITY_DIRECTION)
+        # print("results was saved")
+        
+    generate_html(run_id, config.SAVE_RESULTS_PATH, config.MODALITY_DIRECTION)
+    # print("html was generated")
+    
+    
