@@ -11,6 +11,7 @@ optuna/
 
 # Ignore ipynb files
 *.ipynb
+model/*.ipynb
 
 # Ignore specific files
 load_data.py
