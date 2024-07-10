@@ -19,7 +19,7 @@ from dataset import MRI_dataset
 from utils.config_reader import Config
 # from train_options import Options
 import train_options as config
-from utils.util import *
+from utils.utils import *
 
 # import model.generator as models
 
