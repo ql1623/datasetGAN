@@ -40,10 +40,11 @@ if __name__ == "__main__":
         import model.generator_unet4 as models
     if net_layer == 3:
         import model.generator_unet3 as models   
-        
-    gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features)
+    
+    num_modalities = 3
+    gen = models.datasetGAN(input_channels=1+num_modalities, output_channels=1, ngf=num_features)
     # summary(gen, (2, 128, 128))
-    disc = models.Discriminator(in_channels=1, features=[32,64,128,256,512])
+    disc = models.Discriminator(in_channels=1+num_modalities, features=[32,64,128,256,512])
     
     if torch.cuda.device_count() > 1:
         gen = nn.DataParallel(gen) # DistributedDataParallel?
@@ -72,7 +73,7 @@ if __name__ == "__main__":
     # prev_time    = time.time()
     run_id = datetime.datetime.now().strftime("run_%H:%M:%S_%d/%m/%Y")
     
-    save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, train=True)
+    save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, train=True)
     
     for epoch in range(config.NUM_EPOCHS):
     # for epoch in range(5):
@@ -81,24 +82,24 @@ if __name__ == "__main__":
         epoch_losses = []
         for index, images in enumerate(loop):
             
-            image_A, image_B, target_C = get_data_for_task(images, config.MODALITY_DIRECTION)
+            image_A, image_B, target_C, target_labels = get_data_for_input_mod(images, config.MODALITY_DIRECTION)
             
-            image_A, image_B, target_C = image_A.to(config.DEVICE), image_B.to(config.DEVICE), target_C.to(config.DEVICE)
+            image_A, image_B, target_C, target_labels = image_A.to(config.DEVICE), image_B.to(config.DEVICE), target_C.to(config.DEVICE), target_labels.to(config.DEVICE)
             
             x_concat = torch.cat((image_A, image_B), dim=1)
-            target_fake, image_A_recon, image_B_recon = gen(x_concat)
+            target_fake, image_A_recon, image_B_recon = gen(x_concat, target_labels)
             
             
             # backward of disc
             # -- Disc loss for fake --
             set_require_grad(disc, True)
             opt_disc.zero_grad()
-            pred_disc_fake = disc(target_fake.detach()) # as dont want to backward this 
+            pred_disc_fake = disc(target_fake.detach(), target_labels) # as dont want to backward this 
 
             loss_D_fake = criterion_GAN(pred_disc_fake, torch.zeros_like(pred_disc_fake))
             
             # -- Disc loss for real --
-            pred_disc_fake = disc(target_C)
+            pred_disc_fake = disc(target_C, target_labels)
             loss_D_real = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
             
             # get both loss and backprop
@@ -111,7 +112,7 @@ if __name__ == "__main__":
             set_require_grad(disc, False)
             opt_gen.zero_grad()
             
-            pred_disc_fake = disc(target_fake) # D(x)
+            pred_disc_fake = disc(target_fake, target_labels) # D(x)
             
             # loss for GAN
             loss_G_BCE = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
@@ -146,14 +147,14 @@ if __name__ == "__main__":
         scheduler_disc.step()
         scheduler_gen.step()
          
-        log_loss_to_json(config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, run_id, epoch+1, epoch_losses)
-        log_loss_to_txt(config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real)
+        log_loss_to_json(config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, run_id, epoch+1, epoch_losses)
+        log_loss_to_txt(config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real)
            
         if config.SAVE_MODEL:
             if (epoch+1) > 5 and (epoch+1) % config.CHECKPOINT_INTERVAL == 0:
             # if (epoch+1) % config.CHECKPOINT_INTERVAL == 0:
-                save_checkpoint(gen, opt_gen, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, modality_direction=config.MODALITY_DIRECTION, save_filename=f"{epoch+1}_net_G.pth")
-                save_checkpoint(disc, opt_disc, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, modality_direction=config.MODALITY_DIRECTION, save_filename=f"{epoch+1}_net_D.pth")
+                save_checkpoint(gen, opt_gen, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, dir_name=config.RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_G.pth")
+                save_checkpoint(disc, opt_disc, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, dir_name=config.RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_D.pth")
                 print("checkpoint saved")
         
             

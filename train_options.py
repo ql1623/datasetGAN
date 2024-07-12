@@ -2,7 +2,7 @@
 # import os
 import torch
 
-DATA_DIR = "/rds/general/user/ql1623/home/datasetGAN/data_HGG"
+DATA_DIR = "/rds/general/user/ql1623/home/datasetGAN/data"
 
 DATA_SHUFFLE = False
 
@@ -35,8 +35,9 @@ SAVE_MODEL = True
 LOG_INTERVAL = 5
 CHECKPOINT_INTERVAL = 5  
 
+RESULTS_DIR_NAME = "test"
 SAVE_CHECKPOINT_DIR = "/rds/general/user/ql1623/home/datasetGAN/checkpoints"
-SAVE_RESULTS_PATH = "/rds/general/user/ql1623/home/datasetGAN/results"
+SAVE_RESULTS_DIR = "/rds/general/user/ql1623/home/datasetGAN/results"
 
 
 

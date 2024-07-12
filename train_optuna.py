@@ -162,23 +162,23 @@ def objective(trial):
     return loss_G.item()
 
 def save_state(study, trial):
-    with open("sampler_gpu3.pkl", "wb") as sample_file:
+    with open("sampler_gpu4.pkl", "wb") as sample_file:
         pickle.dump(study.sampler, sample_file)
-    with open("pruner_gpu3.pkl", "wb") as pruner_file:
+    with open("pruner_gpu4.pkl", "wb") as pruner_file:
         pickle.dump(study.pruner, pruner_file)
         
 if __name__ == "__main__":
     # config = Config("./utils/params.yaml")
     # config = Options.parse()
     # print(config.BATCH_SIZE)
-    storage_name = "sqlite:///optuna_study_gpu3.db"
-    study_name = "GAN_optimization_gpu3"
+    storage_name = "sqlite:///optuna_study_gpu4.db"
+    study_name = "GAN_optimization_gpu4"
     
-    if os.path.exists("sampler_gpu3.pkl") and os.path.exists("pruner_gpu3.pkl"):
-        with open("sampler_gpu3.pkl", "rb") as sample_file:
+    if os.path.exists("sampler_gpu4.pkl") and os.path.exists("pruner_gpu4.pkl"):
+        with open("sampler_gpu4.pkl", "rb") as sample_file:
             restored_sampler = pickle.load(sample_file)
             print("previously saved SAMPLER was loaded")
-        with open("pruner_gpu3.pkl", "rb") as pruner_file:
+        with open("pruner_gpu4.pkl", "rb") as pruner_file:
             restored_pruner = pickle.load(pruner_file)
             print("previously saved PRUNER was loaded")
             

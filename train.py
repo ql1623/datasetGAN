@@ -72,7 +72,7 @@ if __name__ == "__main__":
     # prev_time    = time.time()
     run_id = datetime.datetime.now().strftime("run_%H:%M:%S_%d/%m/%Y")
     
-    save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, train=True)
+    save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, train=True)
     
     for epoch in range(config.NUM_EPOCHS):
     # for epoch in range(5):
@@ -146,15 +146,15 @@ if __name__ == "__main__":
         scheduler_disc.step()
         scheduler_gen.step()
          
-        log_loss_to_json(config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, run_id, epoch+1, epoch_losses)
-        log_loss_to_txt(config.SAVE_CHECKPOINT_DIR, config.MODALITY_DIRECTION, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real)
+        log_loss_to_json(config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, run_id, epoch+1, epoch_losses)
+        log_loss_to_txt(config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real)
            
         if config.SAVE_MODEL:
             if (epoch+1) > 5 and (epoch+1) % config.CHECKPOINT_INTERVAL == 0:
             # if (epoch+1) % config.CHECKPOINT_INTERVAL == 0:
-                save_checkpoint(gen, opt_gen, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, modality_direction=config.MODALITY_DIRECTION, save_filename=f"{epoch+1}_net_G.pth")
-                save_checkpoint(disc, opt_disc, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, modality_direction=config.MODALITY_DIRECTION, save_filename=f"{epoch+1}_net_D.pth")
-                print("checkpoint saved")
+                save_checkpoint(gen, opt_gen, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, dir_name=config.RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_G.pth")
+                save_checkpoint(disc, opt_disc, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, dir_name=config.RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_D.pth")
+                # print("checkpoint saved")
         
             
 

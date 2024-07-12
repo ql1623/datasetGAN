@@ -1,5 +1,6 @@
 import torch
 import torch.nn.init as init
+import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
 import cv2
@@ -7,7 +8,9 @@ from PIL import Image
 import os
 import json
 
-import train_options as config
+import random
+from itertools import permutations
+# import train_options as config
 
 from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
@@ -68,9 +71,9 @@ def lambda_lr(epoch, lr_start_epoch, num_epochs):
         return max(0.0, 1.0 - float(epoch - lr_start_epoch) / float(num_epochs - lr_start_epoch))
 
 
-def save_config(config, run_id, file_dir, modality_direction, train=True):
+def save_config(config, run_id, file_dir, dir_name, train=True):
     if train:
-        save_path = os.path.join(file_dir, "chpt_" + modality_direction)
+        save_path = os.path.join(file_dir, "chkpt_" + dir_name)
         if not os.path.exists(save_path):
             os.makedirs(save_path)
             
@@ -81,7 +84,7 @@ def save_config(config, run_id, file_dir, modality_direction, train=True):
                     file.write(f"{key}: {value}\n")
                     
     else:
-        save_path = os.path.join(file_dir, modality_direction)
+        save_path = os.path.join(file_dir, dir_name + "test")
         if not os.path.exists(save_path):
             os.makedirs(save_path)
             
@@ -92,11 +95,12 @@ def save_config(config, run_id, file_dir, modality_direction, train=True):
                     file.write(f"{key}: {value}\n")
         
              
-def log_loss_to_txt(log_dir, modality_direction, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real):
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real):
+    save_path = os.path.join(log_dir, "chkpt_" + dir_name)
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
         
-    log_file_path = os.path.join(log_dir, "chkpt_" + modality_direction, "loss_log.txt")
+    log_file_path = os.path.join(save_path, "loss_log.txt")
     
     with open(log_file_path, 'a') as file:
         if epoch == 1:
@@ -106,11 +110,12 @@ def log_loss_to_txt(log_dir, modality_direction, run_id, epoch, loss_G_BCE, loss
         file.write(f"{epoch}\t\t{loss_G_BCE:.6f}\t{loss_G_L1:.6f}\t{loss_G_reconA:.6f}\t{loss_G_reconB:.6f}\t{loss_D_fake:.6f}\t{loss_D_real:.6f}\n")
         file.flush() 
 
-def log_loss_to_json(log_dir, modality_direction, run_id, epoch, losses):
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+def log_loss_to_json(log_dir, dir_name, run_id, epoch, losses):
+    save_path = os.path.join(log_dir, "chkpt_" + dir_name)
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
     
-    log_file_path = os.path.join(log_dir, "chkpt_" + modality_direction, "loss_log.json")
+    log_file_path = os.path.join(save_path, "loss_log.json")
 
     if os.path.exists(log_file_path):
         with open(log_file_path, 'r') as file:
@@ -131,8 +136,8 @@ def log_loss_to_json(log_dir, modality_direction, run_id, epoch, losses):
         json.dump(logs, file, indent=4)
         
 
-def save_checkpoint(model, optimizer, checkpoint_dir, modality_direction, save_filename):
-    save_dir = os.path.join(checkpoint_dir, "chkpt_" + modality_direction)
+def save_checkpoint(model, optimizer, checkpoint_dir, dir_name, save_filename):
+    save_dir = os.path.join(checkpoint_dir, "chkpt_" + dir_name)
     save_path = os.path.join(save_dir, save_filename)
     
     if not os.path.exists(save_dir):
@@ -143,8 +148,8 @@ def save_checkpoint(model, optimizer, checkpoint_dir, modality_direction, save_f
     }    
     torch.save(checkpoint, save_path)
 
-def load_checkpoint(model, optimizer, lr, checkpoint_dir, modality_direction, epoch_num, gen=True):
-    save_dir = os.path.join(checkpoint_dir, "chkpt_" + modality_direction)
+def load_checkpoint(model, optimizer, lr, checkpoint_dir, dir_name, epoch_num, gen=True):
+    save_dir = os.path.join(checkpoint_dir, "chkpt_" + dir_name)
     if gen == True:
         save_path = os.path.join(save_dir, f"{epoch_num}_net_G.pth")
     else:
@@ -153,7 +158,8 @@ def load_checkpoint(model, optimizer, lr, checkpoint_dir, modality_direction, ep
     if not os.path.exists(save_path):
         print("No such checkpoint is in this directory")
          
-    checkpoint = torch.load(save_path, map_location=config.DEVICE)
+    # checkpoint = torch.load(save_path, map_location=config.DEVICE)
+    checkpoint = torch.load(save_path)
     model.load_state_dict(checkpoint["state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer"])
     
@@ -225,7 +231,7 @@ def patches_to_images(pred_patches, real_patches, image_ori_shape, num_patches):
     return pred_images, real_images
 
 
-def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir, modality_direction): # pred_images and real_images [32,1,160,200]
+def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir, dir_name): # pred_images and real_images [32,1,160,200]
     
     batch_size = pred_images.shape[0]
     error_metrics= {
@@ -247,8 +253,8 @@ def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir,
     avg_mse = np.mean(error_metrics["MSE"])
     
     if eval_log_dir:
-        if modality_direction:
-            eval_log_path = os.path.join(eval_log_dir, modality_direction)
+        if dir_name:
+            eval_log_path = os.path.join(eval_log_dir, dir_name)
         else:
             eval_log_path = eval_log_dir
         if not os.path.exists(eval_log_path):
@@ -289,9 +295,9 @@ def save_image(tensor, png_save_path):
     png_image.save(png_save_path)
 
 
-def save_results(batch_id, image_A, image_B, pred_images, real_images, save_results_dir, modality_direction):
+def save_results(batch_id, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
     """Save images to a specified folder."""
-    save_path = os.path.join(save_results_dir, modality_direction, "images")
+    save_path = os.path.join(save_results_dir, dir_name, "images")
     if not os.path.exists(save_path):
         os.makedirs(save_path, exist_ok=True)
     
@@ -304,11 +310,11 @@ def save_results(batch_id, image_A, image_B, pred_images, real_images, save_resu
         save_image(real_images[i], os.path.join(save_path, f"{id_str}_real_C.png"))
 
 
-def generate_html(run_id, save_results_dir, modality_direction):
+def generate_html(run_id, save_results_dir, dir_name):
     """Generate an HTML file to view the images."""
-    save_images_path = os.path.join(save_results_dir, modality_direction, "images")
-    save_html_path = os.path.join(save_results_dir, modality_direction)
-    html_content = f"<html><body><h2>Testing Results {modality_direction}</h2>"
+    save_images_path = os.path.join(save_results_dir, dir_name, "images")
+    save_html_path = os.path.join(save_results_dir, dir_name)
+    html_content = f"<html><body><h2>Testing Results {dir_name}</h2>"
     pred_images = {}
     
     for filename in sorted(os.listdir(save_images_path)):
@@ -403,3 +409,139 @@ def get_data_for_task(images, modality_direction):
         image_C = torch.reshape(images[0],(images[0].shape[0] * images[0].shape[1], 1, images[0].shape[2], images[0].shape[3])).type(torch.FloatTensor) 
         
     return image_A, image_B, image_C
+
+
+def check_input_seq(input_seq, valid_triplets):
+    input_term = input_seq.split("_")
+    
+    if len(input_term) == 3: # something like "t1_t1ce_t2"
+        input_set = set(input_seq.split('_'))
+        for triplet in valid_triplets:
+            if input_set == set(triplet.split('_')):
+                return True
+        return False
+
+    if len(input_term) == 4: # something like "t1ce_t1_to_flair"
+        pass
+        # first_mod = input_term[0]
+        # second_mod = input_term[1]
+        
+    else: 
+        print("Input Sequence / Modality Direction specified is in wrong format")
+         
+
+def get_data_for_input_mod(images, input_modalities):
+    # images from dataloader are in: [t1_slice, t1ce_slice, t2_slice, flair_slice], each with size [batch_size, 4, 128, 128]
+    valid_triplets = [
+        "t1_t1ce_t2",
+        "t1_t1ce_flair",
+        "t1_t2_flair",
+        "t1ce_t2_flair"
+    ]
+    
+    if check_input_seq(input_modalities, valid_triplets):
+        # modalities_map = {
+        #     't1': 0,
+        #     't1ce': 1,
+        #     't2': 2,
+        #     'flair': 3
+        # }
+        modalities_map = {
+            't1': 0,
+            't2': 1,
+            'flair': 2
+        }
+        modalities = input_modalities.split("_") # something like "t1_t1ce_t2"
+        image_mod_num = [modalities_map[mod] for mod in modalities]
+            
+        in_out_combinations = [
+            (image_mod_num[0], image_mod_num[1], image_mod_num[2]),
+            (image_mod_num[0], image_mod_num[2], image_mod_num[1]),
+            (image_mod_num[1], image_mod_num[2], image_mod_num[0])
+        ]
+        
+        batch_size = images[0].shape[0]
+        image_A_list, image_B_list, image_C_list, target_labels_list = [], [], [], []
+        for i in range(batch_size):
+            img_A_mod_num, img_B_mod_num, img_C_mod_num = random.choice(in_out_combinations)
+            image_A_list.append(images[img_A_mod_num][i])
+            image_B_list.append(images[img_B_mod_num][i])
+            image_C_list.append(images[img_C_mod_num][i])
+            target_labels_list.append(torch.tensor([img_C_mod_num] * images[img_C_mod_num].shape[1]))
+            
+        images_A_batch = torch.unsqueeze(torch.cat(image_A_list, dim=0), dim=1).type(torch.FloatTensor)
+        images_B_batch = torch.unsqueeze(torch.cat(image_B_list, dim=0), dim=1).type(torch.FloatTensor)
+        images_C_batch = torch.unsqueeze(torch.cat(image_C_list, dim=0), dim=1).type(torch.FloatTensor)
+        target_labels_batch = get_ohe_label_vec(torch.cat(target_labels_list, dim=0), len(modalities_map), images_C_batch.shape[2])
+        # print(target_labels_batch.shape)
+    else:
+        # raise ValueError("Invalid input modalities format")
+        print("Invalid input modalities format")
+    
+    return images_A_batch, images_B_batch, images_C_batch, target_labels_batch
+
+def get_ohe_label_vec(output_modality_num, num_classes, img_size):
+    ohe_labels = F.one_hot(output_modality_num, num_classes).unsqueeze(2).unsqueeze(3)
+    return ohe_labels.repeat(1, 1, img_size, img_size)
+
+# def get_condition_label(modality_direction, num_classes):
+#     output_mod = modality_direction.split("_")[-1]
+#     out_mod_ohe_label = get_ohe_label(output_mod, num_classes)
+    
+#     return out_mod_ohe_label
+
+if __name__ == "__main__":
+    # modality_direction = "t1_t2_to_flair"
+    # num_classes = 3
+    # condition_modality = get_condition_label(modality_direction, num_classes)
+    # print(condition_modality)
+    # print(condition_modality.shape)
+    
+    
+    def check_input_seq(input_seq, valid_triplets):
+        input_term = input_seq.split("_")
+        
+        if len(input_term) == 3: # something like "t1_t1ce_t2"
+            input_set = set(input_seq.split('_'))
+            for triplet in valid_triplets:
+                if input_set == set(triplet.split('_')):
+                    return True
+            return False
+
+        if len(input_term) == 4: # something like "t1ce_t1_to_flair"
+            pass
+            # first_mod = input_term[0]
+            # second_mod = input_term[1]
+            
+        else: 
+            print("Input Sequence / Modality Direction specified is in wrong format")\
+                
+    valid_triplets = [
+        "t1_t1ce_t2",
+        "t1_t1ce_flair",
+        "t1_t2_flair",
+        "t1ce_t2_flair"
+    ]
+    # "t1_t1ce_t2" or "t1_t2_t1ce" or "t1ce_t2_t1"  or "t1ce_t1_t2" or "t2_t1_t1ce" or "t2_t1ce_t1"
+    
+    # "t1_t1ce_t2" or "t1_t1ce_flair" or "t1ce_t2_t1" or "t1ce_t2_flair" or "t2_flair_t1" or "t2_flair_t1ce" or 
+    # "t1_t2_t1ce" or "t1_t2_flair" or "t1_flair_t1ce" or "t1_flair_t2" or "t1ce_flair_t2" or "t1ce_flair_t1"
+
+    # print(check_input_seq("t1ce_flair_t1", valid_triplets))
+    input_modalities = "t1_t1ce_flair"
+    modalities_map = {
+            't1': 0,
+            't1ce': 1,
+            't2': 2,
+            'flair': 3
+        }
+    modalities = input_modalities.split("_") # something like "t1_t1ce_t2"
+    img_A_mod_num = modalities_map[modalities[0]]
+    img_B_mod_num = modalities_map[modalities[1]]
+    img_C_mod_num = modalities_map[modalities[2]]
+    
+    print(img_A_mod_num)
+    print(img_B_mod_num)
+    print(img_C_mod_num)
+
+    
