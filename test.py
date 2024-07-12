@@ -47,14 +47,14 @@ if __name__ == "__main__":
     opt_disc = optim.Adam(disc.parameters(), lr=config.LEARNING_RATE, betas=(config.B1, config.B2)) 
     
     epoch_to_load = 200
-    gen, opt_gen = load_checkpoint(gen, opt_gen, config.LEARNING_RATE, config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, epoch_to_load, gen=True)
-    disc, opt_disc = load_checkpoint(disc, opt_disc, config.LEARNING_RATE, config.SAVE_CHECKPOINT_DIR, config.RESULTS_DIR_NAME, epoch_to_load, gen=False)
+    gen, opt_gen = load_checkpoint(gen, opt_gen, config.LEARNING_RATE, config.SAVE_CHECKPOINT_DIR, config.SAVE_RESULTS_DIR_NAME, epoch_to_load, gen=True)
+    disc, opt_disc = load_checkpoint(disc, opt_disc, config.LEARNING_RATE, config.SAVE_CHECKPOINT_DIR, config.SAVE_RESULTS_DIR_NAME, epoch_to_load, gen=False)
     
     test_dataset = MRI_dataset(config, transform=None, train=False, test=True)
     test_loader = DataLoader(test_dataset, batch_size=config.BATCH_SIZE, shuffle=False)
     
     run_id = datetime.datetime.now().strftime("run_%d-%m-%Y_%H-%M-%S")
-    save_config(config, run_id, config.SAVE_RESULTS_DIR, config.RESULTS_DIR_NAME, train=False)
+    save_config(config, run_id, config.SAVE_RESULTS_DIR, config.SAVE_RESULTS_DIR_NAME, train=False)
     
     for index, images in enumerate(test_loader):
         
@@ -70,14 +70,14 @@ if __name__ == "__main__":
             real_images_A, real_images_B = patches_to_images(image_A, image_B, [160,200], [2,2])
             
             # import pdb; pdb.set_trace()
-            avg_ssim, avg_psnr, avg_mse = evaluate_images(pred_images_C, real_images_C, run_id, index, config.SAVE_RESULTS_DIR, config.RESULTS_DIR_NAME) 
+            avg_ssim, avg_psnr, avg_mse = evaluate_images(pred_images_C, real_images_C, run_id, index, config.SAVE_RESULTS_DIR, config.SAVE_RESULTS_DIR_NAME) 
             
             print("[" + f"Batch {index+1}: MSE: {avg_mse:.6f} | SSIM: {avg_ssim:.6f} | PSNR: {avg_psnr:.6f}" + "]")
         
-        save_results(index, real_images_A, real_images_B, pred_images_C, real_images_C, config.SAVE_RESULTS_DIR, config.RESULTS_DIR_NAME)
+        save_results(index, real_images_A, real_images_B, pred_images_C, real_images_C, config.SAVE_RESULTS_DIR, config.SAVE_RESULTS_DIR_NAME)
         # print("results was saved")
         
-    generate_html(run_id, config.SAVE_RESULTS_DIR, config.RESULTS_DIR_NAME)
+    generate_html(run_id, config.SAVE_RESULTS_DIR, config.SAVE_RESULTS_DIR_NAME)
     # print("html was generated")
     
     

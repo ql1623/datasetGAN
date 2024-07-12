@@ -35,7 +35,8 @@ SAVE_MODEL = True
 LOG_INTERVAL = 5
 CHECKPOINT_INTERVAL = 5  
 
-RESULTS_DIR_NAME = "test"
+SAVE_RESULTS_DIR_NAME = "test"
+LOAD_RESULTS_DIR_NAME = "test"
 SAVE_CHECKPOINT_DIR = "/rds/general/user/ql1623/home/datasetGAN/checkpoints"
 SAVE_RESULTS_DIR = "/rds/general/user/ql1623/home/datasetGAN/results"
 
