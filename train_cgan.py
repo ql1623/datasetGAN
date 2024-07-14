@@ -42,7 +42,8 @@ if __name__ == "__main__":
         raise Exception("Number of UNET layers, net_layer is not specified to 4")
         
     num_modalities = 3   
-    gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features)
+    gan_version = config.GAN_VERSION
+    gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features, version=gan_version)
     # summary(gen, (2, 128, 128))
     disc = models.Discriminator(in_channels=1, features=[32,64,128,256,512])
     
@@ -76,7 +77,6 @@ if __name__ == "__main__":
     train_dataset = MRI_dataset(config, transform=True, train=True)
     train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, num_workers=4)
     
-    # prev_time    = time.time()
     run_id = datetime.datetime.now().strftime("run_%H:%M:%S_%d/%m/%Y")
     
     save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.SAVE_RESULTS_DIR_NAME, train=True)

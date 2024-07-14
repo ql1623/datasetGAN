@@ -145,7 +145,7 @@ class ConditionalBlock(nn.Module):
 # =========== define model architecture ============ #
 class datasetGAN(nn.Module):
     """ Defining Generator of the model """
-    def __init__(self, input_channels, output_channels, ngf): # input_channels = 1, output_channel = 1, ngf = 64/32 , features = [16,32,64,128]
+    def __init__(self, input_channels, output_channels, ngf, version): # input_channels = 1, output_channel = 1, ngf = 64/32 , features = [16,32,64,128]
         """Generator with UNET and Fusion Network 
 
         Parameters:
@@ -158,6 +158,7 @@ class datasetGAN(nn.Module):
         self.input_channels = input_channels
         self.features = ngf
         self.output_channels = output_channels
+        self.version = version
         
         # -------- Modality Encoder - Modality 1 -------- 
         # encoding path
@@ -244,7 +245,14 @@ class datasetGAN(nn.Module):
         # decoding path
         
         # condition part
-        self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+        if self.version == 1:
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+        elif self.version == 2:
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=8, num_output_comb=3, is_linear=True)
+        elif self.version == 3:
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+        else:
+            raise Exception("version specified is wrong")
         
         self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         self.fusion_up0 = SamplingBlock(self.features*8, self.features*8, down=False, act_fn="relu", norm="batch", use_dropout=False)
@@ -372,7 +380,13 @@ class datasetGAN(nn.Module):
         
         # ----- fusion part (for decoding path) -----
         condition_feat = self.cond(condition)
-        fusion_0 = self.fusion0(bottleneck_x1 + condition_feat, bottleneck_x2 + condition_feat)
+        if self.version == 1:
+            fusion_0 = self.fusion0(bottleneck_x1 + condition_feat, bottleneck_x2 + condition_feat)
+        elif self.version == 2:
+            fusion_0 = self.fusion0(bottleneck_x1 + condition_feat[:, 0:self.features*8, :, :], bottleneck_x2 + condition_feat[:, self.features*8:, :, :])
+        elif self.version == 3:
+            fusion_0_pre = self.fusion0(bottleneck_x1, bottleneck_x2)
+            fusion_0 = fusion_0_pre + condition_feat
         fusion_upsamp0 = self.fusion_up0(fusion_0)
         
         fusion_1 = self.fusion1(upconv1_x1, upconv1_x2)
@@ -467,11 +481,11 @@ def test():
     # print(pred_x2.shape)
     # print(preds_disc.shape)
 
-    # model = datasetGAN(1,1,32)
-    # summary(model, [(2, 128, 128),  (3, )]) 
+    model = datasetGAN(1,1,32, version=3)
+    summary(model, [(2, 128, 128),  (3, )]) 
     
-    model = Discriminator(in_channels=1, features=[32,64,128,256,512])
-    summary(model, [(1, 128, 128),  (3, )]) 
+    # model = Discriminator(in_channels=1, features=[32,64,128,256,512])
+    # summary(model, [(1, 128, 128),  (3, )]) 
     
     
     
@@ -542,7 +556,29 @@ if __name__ == "__main__":
 # Params size (MB): 56.00
 # Estimated Total Size (MB): 199.50
 
-# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 1
+# Total params: 14,746,691
+# Trainable params: 14,746,691
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.50
+# Params size (MB): 56.25
+# Estimated Total Size (MB): 199.88
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 2
+# Total params: 14,812,227
+# Trainable params: 14,812,227
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.62
+# Params size (MB): 56.50
+# Estimated Total Size (MB): 200.25
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 3
 # Total params: 14,746,691
 # Trainable params: 14,746,691
 # Non-trainable params: 0
