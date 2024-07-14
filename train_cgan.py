@@ -81,8 +81,8 @@ if __name__ == "__main__":
     
     save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.SAVE_RESULTS_DIR_NAME, train=True)
     
-    # for epoch in range(config.NUM_EPOCHS):
-    for epoch in range(1):
+    for epoch in range(config.NUM_EPOCHS):
+    # for epoch in range(1):
         
         loop = tqdm(train_loader, leave=True)
         epoch_losses = []
