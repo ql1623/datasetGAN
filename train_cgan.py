@@ -15,36 +15,36 @@ import torch.autograd as autograd
 
 from collections import OrderedDict
 
-from dataset import MRI_dataset
-
 from utils.config_reader import Config
 # from train_options import Options
 import train_options as config
 from utils.utils import *
 
-# import model.generator as models
-import model.generator_unet4 as models
 
 if __name__ == "__main__":
     # config = Config("./utils/params.yaml")
     # config = Options.parse()
     # print(config.BATCH_SIZE)
-    
-    # define GENERATOR and DISCRIMINATOR
-    # net_layer = 4
-    # num_features = 32
+    start_time = time.time()
+     
     net_layer = config.NUM_LAYERS
     num_features = config.NUM_FEATURES
-    print(f"Model architecture is {net_layer} layers, with {num_features} intiial feature channels")
-    if net_layer == 4:
-        import model.generator_unet4 as models
-    if net_layer == 3:
-        import model.generator_unet3 as models   
+    print(f"Model architecture is {net_layer} layers, with {num_features} initial feature channels")
     
-    num_modalities = 3
-    gen = models.datasetGAN(input_channels=1+num_modalities, output_channels=1, ngf=num_features)
+    if net_layer == 4:
+        if config.CONDITION_METHOD == "concat":
+            import model.cgan.generator_unet4_cgan as models
+        elif config.CONDITION_METHOD == "add": # not concat but add
+            import model.cgan.generator_unet4_cgan_v2 as models  
+        else:  
+            raise Exception("Condition method in GAN is not one of the predefined options")
+    else:
+        raise Exception("Number of UNET layers, net_layer is not specified to 4")
+        
+    num_modalities = 3   
+    gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features)
     # summary(gen, (2, 128, 128))
-    disc = models.Discriminator(in_channels=1+num_modalities, features=[32,64,128,256,512])
+    disc = models.Discriminator(in_channels=1, features=[32,64,128,256,512])
     
     if torch.cuda.device_count() > 1:
         gen = nn.DataParallel(gen) # DistributedDataParallel?
@@ -67,22 +67,33 @@ if __name__ == "__main__":
     criterion_GAN = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
     
-    train_dataset = MRI_dataset(config, transform=None, train=True, test=False)
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+    dataset_version = 2
+    if dataset_version == 1:
+        from dataset_png import MRI_dataset
+    elif dataset_version == 2:
+        from dataset_png_v2 import MRI_dataset
+        
+    train_dataset = MRI_dataset(config, transform=True, train=True)
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE, shuffle=True, num_workers=4)
     
     # prev_time    = time.time()
     run_id = datetime.datetime.now().strftime("run_%H:%M:%S_%d/%m/%Y")
     
     save_config(config, run_id, config.SAVE_CHECKPOINT_DIR, config.SAVE_RESULTS_DIR_NAME, train=True)
     
-    for epoch in range(config.NUM_EPOCHS):
-    # for epoch in range(5):
+    # for epoch in range(config.NUM_EPOCHS):
+    for epoch in range(1):
         
         loop = tqdm(train_loader, leave=True)
         epoch_losses = []
-        for index, images in enumerate(loop):
-            
-            image_A, image_B, target_C, target_labels = get_data_for_input_mod(images, config.MODALITY_DIRECTION)
+        for index, images_labels in enumerate(loop):
+            if dataset_version == 1:
+                from dataset_png import MRI_dataset
+            elif dataset_version == 2:
+                from dataset_png_v2 import MRI_dataset
+           
+                image_A, image_B, target_C, target_labels, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
+                image_A, image_B, target_C, target_labels = reshape_data(image_A, image_B, target_C, target_labels)
             
             image_A, image_B, target_C, target_labels = image_A.to(config.DEVICE), image_B.to(config.DEVICE), target_C.to(config.DEVICE), target_labels.to(config.DEVICE)
             
@@ -155,8 +166,11 @@ if __name__ == "__main__":
             # if (epoch+1) % config.CHECKPOINT_INTERVAL == 0:
                 save_checkpoint(gen, opt_gen, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, dir_name=config.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_G.pth")
                 save_checkpoint(disc, opt_disc, checkpoint_dir=config.SAVE_CHECKPOINT_DIR, dir_name=config.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_D.pth")
-                print("checkpoint saved")
-        
+                # print("checkpoint saved")
+    
+    end_time = time.time()  
+    
+    print(f"Time taken: {end_time - start_time:.4f} seconds")
             
 
     

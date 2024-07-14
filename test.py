@@ -33,7 +33,7 @@ def print_model_structure(module, indent=0):
 if __name__ == "__main__":
     net_layer = config.NUM_LAYERS
     num_features = config.NUM_FEATURES
-    print(f"Model architecture is {net_layer} layers, with {num_features} intiial feature channels")
+    print(f"Model architecture is {net_layer} layers, with {num_features} initial feature channels")
     if net_layer == 4:
         import model.generator_unet4 as models
     if net_layer == 3:
@@ -66,8 +66,8 @@ if __name__ == "__main__":
         with torch.no_grad():
             pred_target, pred_image_A_recon, pred_image_B_recon = gen(x_concat)
             
-            pred_images_C, real_images_C = patches_to_images(pred_target, real_target_C, [160,200], [2,2])
-            real_images_A, real_images_B = patches_to_images(image_A, image_B, [160,200], [2,2])
+            pred_images_C, real_images_C = patches_to_images(pred_target, real_target_C, [200,200], [2,2])
+            real_images_A, real_images_B = patches_to_images(image_A, image_B, [200,200], [2,2])
             
             # import pdb; pdb.set_trace()
             avg_ssim, avg_psnr, avg_mse = evaluate_images(pred_images_C, real_images_C, run_id, index, config.SAVE_RESULTS_DIR, config.SAVE_RESULTS_DIR_NAME) 

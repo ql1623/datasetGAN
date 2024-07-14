@@ -35,7 +35,7 @@ if __name__ == "__main__":
     # num_features = 32
     net_layer = config.NUM_LAYERS
     num_features = config.NUM_FEATURES
-    print(f"Model architecture is {net_layer} layers, with {num_features} intiial feature channels")
+    print(f"Model architecture is {net_layer} layers, with {num_features} initial feature channels")
     if net_layer == 4:
         import model.generator_unet4 as models
     if net_layer == 3:

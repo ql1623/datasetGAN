@@ -3,6 +3,7 @@
 import torch
 
 DATA_DIR = "/rds/general/user/ql1623/home/datasetGAN/data"
+DATA_PNG_DIR = "/rds/general/user/ql1623/home/datasetGAN/data_png"
 
 DATA_SHUFFLE = False
 
@@ -10,12 +11,15 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 GPU_IDS = [0,1,2,3]
 
 MODALITY_DIRECTION = "t1_t2_to_flair"
+INPUT_MODALITIES = "t1_t2_flair"
 
 BATCH_SIZE = 32
 NUM_EPOCHS = 200
 
 NUM_LAYERS = 4
 NUM_FEATURES = 32
+CONDITION_METHOD = "add"
+
 LEARNING_RATE = 2e-4
 LR_START_EPOCH = 50
 LR_DECAY = 0.95
@@ -35,8 +39,8 @@ SAVE_MODEL = True
 LOG_INTERVAL = 5
 CHECKPOINT_INTERVAL = 5  
 
-SAVE_RESULTS_DIR_NAME = "test"
-LOAD_RESULTS_DIR_NAME = "test"
+SAVE_RESULTS_DIR_NAME = "t1_t2_flair_cgan"
+# LOAD_RESULTS_DIR_NAME = "new_dataset"
 SAVE_CHECKPOINT_DIR = "/rds/general/user/ql1623/home/datasetGAN/checkpoints"
 SAVE_RESULTS_DIR = "/rds/general/user/ql1623/home/datasetGAN/results"
 

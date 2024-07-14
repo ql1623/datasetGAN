@@ -67,7 +67,7 @@ class SamplingBlock(nn.Module):
 
 
 class FusionBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, groups, act_fn="leaky", norm="batch"):
+    def __init__(self, in_channels, out_channels, groups, act_fn="leaky", norm="batch", initial=False):
         """Fuse same-level feature layers of different modalities
 
         Parameters:
@@ -81,19 +81,26 @@ class FusionBlock(nn.Module):
         super(FusionBlock, self).__init__()
         # self.initial = initial
         
+        self.initial = initial
         # conv 3d to merge representation of same-level feature layers from both modality
         self.group_conv =  nn.Sequential(
-            nn.Conv3d(in_channels, out_channels, kernel_size=(2, 3, 3), padding=(0, 1, 1), groups=groups),
+            # nn.Conv3d(in_channels, out_channels, kernel_size=(2, 3, 3), padding=(0, 1, 1), groups=groups),
+            nn.Conv3d(in_channels, out_channels, kernel_size=(2+3 if initial else 2, 3, 3), padding=(0, 1, 1), groups=groups),
             # nn.Conv3d(in_channels, in_channels, kernel_size=(3, 3, 3), padding=(0, 1, 1), groups=groups), for if want like unet in fusion net as well?
             nn.BatchNorm3d(out_channels) if norm=="batch" else nn.InstanceNorm3d(out_channels),
             nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
         )
-
-    def forward(self, x1, x2):
+        
+    def forward(self, x1, x2, condition=None):
         # concat in new dim
-        x = torch.stack([x1, x2], dim=1)
+        if self.initial: 
+            if condition is not None:
+                condition = (condition.unsqueeze(2).unsqueeze(3)).repeat(1, 1, x1.shape[2], x1.shape[3]) # [B, C] --> [B, C=3, H, W]
+                x = torch.stack((x1, x2, condition), dim=2) # [B, C, H, W] --> [B, C, stack, H, W] = [B, C=64, stack=2+1, H, W]
+        else:
+            x = torch.stack((x1, x2), dim=2) # [B, C, H, W] --> [B, C, stack, H, W] = [B, C=64, stack=2, H, W]
         # then swap new dim with channel dim
-        x = x.permute(0, 2, 1, 3, 4).contiguous()
+        # x = x.permute(0, 2, 1, 3, 4).contiguous() # [B, stack=2, C=64, H, W] --> [B, C=64, stack=2+1, H, W], then conv3d on [stack=2+1, H, W]
         # implement the conv3d defined 
         x = self.group_conv(x)
         x = x.squeeze(2)
@@ -120,7 +127,8 @@ class datasetGAN(nn.Module):
         
         # -------- Modality Encoder - Modality 1 -------- 
         # encoding path
-        self.down1_mod1 = ConvBlock(in_channels=self.input_channels*2, out_channels=self.features, act_fn="leaky", norm="batch", use_dropout=False)
+        self.down1_mod1 = ConvBlock(in_channels=self.input_channels, out_channels=self.features, act_fn="leaky", norm="batch", use_dropout=False)
+        # self.down1_mod1 = ConvBlock(in_channels=self.input_channels*2, out_channels=self.features, act_fn="leaky", norm="batch", use_dropout=False)
         # in_channels=self.input_channels * 2 as adding in labels for cgan
         self.pool1_mod1 = SamplingBlock(in_channels=self.features, out_channels=self.features, down=True, act_fn="leaky", norm="batch", use_dropout=False)
         
@@ -201,7 +209,8 @@ class datasetGAN(nn.Module):
          
         # encoding path       
         # decoding path
-        self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch")
+        
+        self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         self.fusion_up0 = SamplingBlock(self.features*8, self.features*8, down=False, act_fn="relu", norm="batch", use_dropout=False)
         
         self.fusion1 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch")
@@ -226,7 +235,7 @@ class datasetGAN(nn.Module):
             nn.Tanh()
         )
         
-    def forward(self,inputs):
+    def forward(self, inputs, condition):
         # import pdb; pdb.set_trace()
         # inputs.shape = [128,2,128,128] = [batch_size*num_patches, num_modality, H, W]   
 
@@ -326,7 +335,7 @@ class datasetGAN(nn.Module):
         # out_x2 = self.final_conv_mod2(upconv3_x2)
         
         # ----- fusion part (for decoding path) -----
-        fusion_0 = self.fusion0(bottleneck_x1, bottleneck_x2)
+        fusion_0 = self.fusion0(bottleneck_x1, bottleneck_x2, condition)
         fusion_upsamp0 = self.fusion_up0(fusion_0)
         
         fusion_1 = self.fusion1(upconv1_x1, upconv1_x2)
@@ -401,8 +410,9 @@ class Discriminator(nn.Module):
         
         self.disc = nn.Sequential(*layers)
 
-    def forward(self, x):
-        x = self.intitial_conv(x)
+    def forward(self, x, condition):
+        condition = (condition.unsqueeze(2).unsqueeze(3)).repeat(1, 1, x.shape[2], x.shape[3]) # [B, C] --> [B, C=3, H, W]
+        x = self.intitial_conv(torch.cat((x, condition), 1))
         return self.disc(x)    
 
 def test():
@@ -419,7 +429,7 @@ def test():
     # print(preds_disc.shape)
 
     model = datasetGAN(1,1,32)
-    summary(model, (2, 128, 128)) 
+    summary(model, [(2, 128, 128),  (3, )]) 
     
 
 if __name__ == "__main__":

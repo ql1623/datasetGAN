@@ -7,6 +7,7 @@ checkpoints/
 results/
 data/
 data_HGG/
+data_png/
 optuna/
 
 # Ignore ipynb files

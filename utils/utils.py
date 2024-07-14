@@ -9,6 +9,7 @@ import os
 import json
 
 import random
+import itertools
 from itertools import permutations
 # import train_options as config
 
@@ -82,9 +83,10 @@ def save_config(config, run_id, file_dir, dir_name, train=True):
             for key, value in config.__dict__.items():
                 if not key.startswith('__') and not callable(value) and not isinstance(value, type(config)):
                     file.write(f"{key}: {value}\n")
+        print("Training Options saved to: ", save_path)
                     
     else:
-        save_path = os.path.join(file_dir, dir_name + "test")
+        save_path = os.path.join(file_dir, dir_name + "_test")
         if not os.path.exists(save_path):
             os.makedirs(save_path)
             
@@ -93,6 +95,8 @@ def save_config(config, run_id, file_dir, dir_name, train=True):
             for key, value in config.__dict__.items():
                 if not key.startswith('__') and not callable(value) and not isinstance(value, type(config)):
                     file.write(f"{key}: {value}\n")
+        print("Testing Options saved to: ", save_path)
+        
         
              
 def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real):
@@ -254,12 +258,12 @@ def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir,
     
     if eval_log_dir:
         if dir_name:
-            eval_log_path = os.path.join(eval_log_dir, dir_name)
+            eval_log_path = os.path.join(eval_log_dir, dir_name + "_test")
         else:
             eval_log_path = eval_log_dir
         if not os.path.exists(eval_log_path):
             os.makedirs(eval_log_path)
-            
+
         eval_log_file = os.path.join(eval_log_path, "test_results.txt")
         
         with open(eval_log_file, 'a') as log_file:
@@ -295,39 +299,39 @@ def save_image(tensor, png_save_path):
     png_image.save(png_save_path)
 
 
-def save_results(batch_id, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
+def save_results(img_id, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
     """Save images to a specified folder."""
-    save_path = os.path.join(save_results_dir, dir_name, "images")
+    save_path = os.path.join(save_results_dir, dir_name + "_test", "images")
     if not os.path.exists(save_path):
         os.makedirs(save_path, exist_ok=True)
     
-    for i in range(image_A.shape[0]):
-        id_str = f"Batch_{batch_id+1}_{i+1}"
+    for index, img_filename in enumerate(img_id):
+        id_str = img_filename
         
-        save_image(image_A[i], os.path.join(save_path, f"{id_str}_real_A.png"))
-        save_image(image_B[i], os.path.join(save_path, f"{id_str}_real_B.png"))
-        save_image(pred_images[i], os.path.join(save_path, f"{id_str}_fake_C.png"))
-        save_image(real_images[i], os.path.join(save_path, f"{id_str}_real_C.png"))
+        save_image(image_A[index], os.path.join(save_path, f"{id_str}_real_A.png"))
+        save_image(image_B[index], os.path.join(save_path, f"{id_str}_real_B.png"))
+        save_image(pred_images[index], os.path.join(save_path, f"{id_str}_fake_C.png"))
+        save_image(real_images[index], os.path.join(save_path, f"{id_str}_real_C.png"))
 
 
 def generate_html(run_id, save_results_dir, dir_name):
     """Generate an HTML file to view the images."""
-    save_images_path = os.path.join(save_results_dir, dir_name, "images")
-    save_html_path = os.path.join(save_results_dir, dir_name)
+    save_images_path = os.path.join(save_results_dir, dir_name + "_test", "images")
+    save_html_path = os.path.join(save_results_dir, dir_name + "_test")
     html_content = f"<html><body><h2>Testing Results {dir_name}</h2>"
     pred_images = {}
     
     for filename in sorted(os.listdir(save_images_path)):
         if filename.endswith(".png"):
-            batch_id = "_".join(filename.split("_")[:3])
-            # print(batch_id)
-            if batch_id not in pred_images:
-                pred_images[batch_id] = []
-            pred_images[batch_id].append(filename)
+            img_id = "_".join(filename.split("_")[:-2])
+            # print(img_id)
+            if img_id not in pred_images:
+                pred_images[img_id] = []
+            pred_images[img_id].append(filename)
     
     # print(pred_images.keys())        
-    for batch_id, files in pred_images.items():
-        html_content += f'<h3>{batch_id}</h3>'
+    for img_id, files in pred_images.items():
+        html_content += f'<h3>{img_id}</h3>'
         html_content += '<div style="display: flex;">'
         img_sequence = ['real_A', 'real_B', 'fake_C', 'real_C']
         for file in files:
@@ -428,9 +432,91 @@ def check_input_seq(input_seq, valid_triplets):
         
     else: 
         print("Input Sequence / Modality Direction specified is in wrong format")
-         
 
+
+def get_key(value, mod_dict):
+    for k, v in mod_dict.items():
+        if value == v:
+            return k
+    return "Corresponding key not found for this value"
+
+
+class BalancedChooser:
+    def __init__(self, combinations):
+        self.combinations = combinations
+        self.reset()
+    
+    def reset(self):
+        random.shuffle(self.combinations)
+        self.iterator = itertools.cycle(self.combinations)
+    
+    def choose(self):
+        if hasattr(self, 'remains') and self.remains == 0:
+            self.reset()
+        if not hasattr(self, 'remains'): 
+            self.remains = len(self.combinations) - 1
+        else: 
+            self.remains - 1
+        return next(self.iterator)
+    
 def get_data_for_input_mod(images, input_modalities):
+    # images from dataloader are in: [image_A, image_B, image_C], images with size [batch_size, 4, 128, 128]
+    valid_triplets = [
+        "t1_t1ce_t2",
+        "t1_t1ce_flair",
+        "t1_t2_flair",
+        "t1ce_t2_flair"
+    ]
+    
+    if check_input_seq(input_modalities, valid_triplets):
+        # modalities_map = {
+        #     't1': 0,
+        #     't1ce': 1,
+        #     't2': 2,
+        #     'flair': 3
+        pass
+    else:
+        # raise ValueError("Invalid input modalities format")
+        print("Invalid input modalities format")
+        
+    modalities = input_modalities.split("_") # something like "t1_t1ce_t2"
+    # modalities_map = {
+    #     modalities[0]: 0,
+    #     modalities[1]: 1,
+    #     modalities[2]: 2
+    # }
+        
+    in_out_combinations = [
+        (0, 1, 2),
+        (0, 2, 1),
+        (1, 2, 0)
+    ]
+    
+    batch_size = images[0].shape[0]
+    random_choice = BalancedChooser(in_out_combinations)
+    image_A_list, image_B_list, image_C_list, target_labels_list, target_name_list = [], [], [], [], []
+    for i in range(batch_size):
+        img_A_mod_num, img_B_mod_num, img_C_mod_num = random_choice.choose()
+                    
+        image_A_list.append(images[img_A_mod_num][i])
+        image_B_list.append(images[img_B_mod_num][i])
+        image_C_list.append(images[img_C_mod_num][i])
+        target_labels_list.append(torch.tensor([img_C_mod_num] * images[img_C_mod_num].shape[1]))
+        # target_name_list.append(get_key(img_C_mod_num, modalities_map))
+        
+    images_A_batch = torch.unsqueeze(torch.cat(image_A_list, dim=0), dim=1).type(torch.FloatTensor)
+    images_B_batch = torch.unsqueeze(torch.cat(image_B_list, dim=0), dim=1).type(torch.FloatTensor)
+    images_C_batch = torch.unsqueeze(torch.cat(image_C_list, dim=0), dim=1).type(torch.FloatTensor)
+    target_labels_batch = get_ohe_label_vec(torch.cat(target_labels_list, dim=0), 3)
+    # print(target_labels_batch.shape)
+    
+    return images_A_batch, images_B_batch, images_C_batch, target_labels_batch #, target_name_list
+
+def get_ohe_label_vec(output_modality_num, num_classes):
+    return F.one_hot(output_modality_num, num_classes)
+
+
+def get_data_for_input_mod_h5(images, input_modalities):
     # images from dataloader are in: [t1_slice, t1ce_slice, t2_slice, flair_slice], each with size [batch_size, 4, 128, 128]
     valid_triplets = [
         "t1_t1ce_t2",
@@ -461,13 +547,19 @@ def get_data_for_input_mod(images, input_modalities):
         ]
         
         batch_size = images[0].shape[0]
-        image_A_list, image_B_list, image_C_list, target_labels_list = [], [], [], []
+        counts = {comb: 0 for comb in in_out_combinations}
+        image_A_list, image_B_list, image_C_list, target_labels_list, target_name_list = [], [], [], [], []
         for i in range(batch_size):
-            img_A_mod_num, img_B_mod_num, img_C_mod_num = random.choice(in_out_combinations)
+            min_count = min(counts.values())
+            possible_choices = [comb for comb in in_out_combinations if counts[comb] == min_count]
+            img_A_mod_num, img_B_mod_num, img_C_mod_num = random.choice(possible_choices)
+            counts[(img_A_mod_num, img_B_mod_num, img_C_mod_num)] += 1
+            
             image_A_list.append(images[img_A_mod_num][i])
             image_B_list.append(images[img_B_mod_num][i])
             image_C_list.append(images[img_C_mod_num][i])
             target_labels_list.append(torch.tensor([img_C_mod_num] * images[img_C_mod_num].shape[1]))
+            target_name_list.append(get_key(img_C_mod_num, modalities_map))
             
         images_A_batch = torch.unsqueeze(torch.cat(image_A_list, dim=0), dim=1).type(torch.FloatTensor)
         images_B_batch = torch.unsqueeze(torch.cat(image_B_list, dim=0), dim=1).type(torch.FloatTensor)
@@ -478,12 +570,15 @@ def get_data_for_input_mod(images, input_modalities):
         # raise ValueError("Invalid input modalities format")
         print("Invalid input modalities format")
     
-    return images_A_batch, images_B_batch, images_C_batch, target_labels_batch
+    return images_A_batch, images_B_batch, images_C_batch, target_labels_batch, target_name_list
 
-def get_ohe_label_vec(output_modality_num, num_classes, img_size):
-    ohe_labels = F.one_hot(output_modality_num, num_classes).unsqueeze(2).unsqueeze(3)
-    return ohe_labels.repeat(1, 1, img_size, img_size)
-
+def reshape_data(image_A, image_B, image_C, target_labels):
+    image_A = image_A.view(-1, 1, 128, 128)
+    image_B = image_B.view(-1, 1, 128, 128)
+    image_C = image_C.view(-1, 1, 128, 128)
+    target_labels = target_labels.view(-1, 3)
+    return image_A, image_B, image_C, target_labels
+    
 # def get_condition_label(modality_direction, num_classes):
 #     output_mod = modality_direction.split("_")[-1]
 #     out_mod_ohe_label = get_ohe_label(output_mod, num_classes)
@@ -491,57 +586,18 @@ def get_ohe_label_vec(output_modality_num, num_classes, img_size):
 #     return out_mod_ohe_label
 
 if __name__ == "__main__":
-    # modality_direction = "t1_t2_to_flair"
-    # num_classes = 3
-    # condition_modality = get_condition_label(modality_direction, num_classes)
-    # print(condition_modality)
-    # print(condition_modality.shape)
+    from datasetGAN import train_options as config
+    from torch.utils.data import DataLoader
+    from datasetGAN.dataset import MRI_dataset
     
+    print(config.BATCH_SIZE)
+    train_data = MRI_dataset(config, train=True)
+    print(len(train_data))
+    train_loader = DataLoader(train_data, batch_size=config.BATCH_SIZE, shuffle=False)
     
-    def check_input_seq(input_seq, valid_triplets):
-        input_term = input_seq.split("_")
-        
-        if len(input_term) == 3: # something like "t1_t1ce_t2"
-            input_set = set(input_seq.split('_'))
-            for triplet in valid_triplets:
-                if input_set == set(triplet.split('_')):
-                    return True
-            return False
-
-        if len(input_term) == 4: # something like "t1ce_t1_to_flair"
-            pass
-            # first_mod = input_term[0]
-            # second_mod = input_term[1]
-            
-        else: 
-            print("Input Sequence / Modality Direction specified is in wrong format")\
-                
-    valid_triplets = [
-        "t1_t1ce_t2",
-        "t1_t1ce_flair",
-        "t1_t2_flair",
-        "t1ce_t2_flair"
-    ]
-    # "t1_t1ce_t2" or "t1_t2_t1ce" or "t1ce_t2_t1"  or "t1ce_t1_t2" or "t2_t1_t1ce" or "t2_t1ce_t1"
-    
-    # "t1_t1ce_t2" or "t1_t1ce_flair" or "t1ce_t2_t1" or "t1ce_t2_flair" or "t2_flair_t1" or "t2_flair_t1ce" or 
-    # "t1_t2_t1ce" or "t1_t2_flair" or "t1_flair_t1ce" or "t1_flair_t2" or "t1ce_flair_t2" or "t1ce_flair_t1"
-
-    # print(check_input_seq("t1ce_flair_t1", valid_triplets))
-    input_modalities = "t1_t1ce_flair"
-    modalities_map = {
-            't1': 0,
-            't1ce': 1,
-            't2': 2,
-            'flair': 3
-        }
-    modalities = input_modalities.split("_") # something like "t1_t1ce_t2"
-    img_A_mod_num = modalities_map[modalities[0]]
-    img_B_mod_num = modalities_map[modalities[1]]
-    img_C_mod_num = modalities_map[modalities[2]]
-    
-    print(img_A_mod_num)
-    print(img_B_mod_num)
-    print(img_C_mod_num)
+    for index, images in enumerate(train_loader):
+        image_A, image_B, target_C, target_labels, target_name_list = get_data_for_input_mod(images, config.INPUT_MODALITIES)
+        print(target_labels.shape)
+        break
 
     

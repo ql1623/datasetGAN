@@ -130,6 +130,8 @@ class MRI_dataset(data.Dataset):
     
 
 if __name__ == "__main__":
+    from utils.utils import *
+    
     # config = Config('HiNet-master/utils/params.yaml')
     print(config.BATCH_SIZE)
     train_data = MRI_dataset(config, train=True)
@@ -138,4 +140,10 @@ if __name__ == "__main__":
     t1_slice, t1ce_slice, t2_slice, flair_slice = next(iter(train_loader))
     print(t1_slice.shape)
     print(type(t1_slice))
+    
+    for index, images in enumerate(train_loader):
+        image_A, image_B, target_C, target_labels, target_name_list = get_data_for_input_mod(images, config.INPUT_MODALITIES)
+        print(target_labels.shape)
+        print(target_name_list)
+        break
     
