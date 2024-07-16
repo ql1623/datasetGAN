@@ -13,7 +13,7 @@ import time
 from utils.utils import *
 import train_options as config
 
-# change to process all data in here so out is one hot target labels and patches after choosing random from v1, v1 is only getting patches 
+# change target labels to in_out_combination chosen instead of one hot from v2
 
 class BalancedChooser:
     def __init__(self, combinations):
@@ -32,7 +32,6 @@ class BalancedChooser:
         else: 
             self.remains -= 1
         return next(self.iterator)
-        
 
 class BalancedRandomChoice:
     def __init__(self, items):
@@ -48,23 +47,27 @@ class BalancedRandomChoice:
             self.reset()
         return self.choices.pop()
         
+        
+        
 class MRI_dataset(Dataset):
-    def __init__(self, config, transform=True, train=True):
-        self.config = config
+    def __init__(self, input_modalities, data_png_dir, transform=True, train=True):
+        # self.config = config
+        self.input_modalities = input_modalities
+        self.data_png_dir = data_png_dir
         self.train = train
         
-        modalities = config.INPUT_MODALITIES.split("_")
+        modalities = self.input_modalities.split("_")
         mod_A, mod_B, mod_C = modalities[0], modalities[1], modalities[2]
-        
+
         self.img_paths = {
-            'A': os.path.join(config.DATA_PNG_DIR, mod_A, 'train' if train else 'test'),
-            'B': os.path.join(config.DATA_PNG_DIR, mod_B, 'train' if train else 'test'),
-            'C': os.path.join(config.DATA_PNG_DIR, mod_C, 'train' if train else 'test')
+            0: os.path.join(self.data_png_dir, mod_A, 'train' if train else 'test'),
+            1: os.path.join(self.data_png_dir, mod_B, 'train' if train else 'test'),
+            2: os.path.join(self.data_png_dir, mod_C, 'train' if train else 'test')
         }
         self.img_lists = {
-            'A': os.listdir(self.img_paths['A']),
-            'B': os.listdir(self.img_paths['B']),
-            'C': os.listdir(self.img_paths['C'])
+            'A': os.listdir(self.img_paths[0]),
+            'B': os.listdir(self.img_paths[1]),
+            'C': os.listdir(self.img_paths[2])
         }
         
         if transform:
@@ -85,6 +88,7 @@ class MRI_dataset(Dataset):
             (1, 2, 0)
         ]
         self.random_choice = BalancedChooser(self.in_out_combinations)
+        # self.random_choice = BalancedRandomChoice(self.in_out_combinations)
 
     def check_input_seq(self, input_seq):
         input_term = input_seq.split("_")
@@ -135,10 +139,13 @@ class MRI_dataset(Dataset):
         patch_size = [128, 128]
         num_patches = [2, 2]
         
-        img_id = self.img_lists["A"][idx].split(".")
-        pil_A = Image.open(os.path.join(self.img_paths["A"], self.img_lists["A"][idx]))
-        pil_B = Image.open(os.path.join(self.img_paths["B"], self.img_lists["B"][idx]))
-        pil_C = Image.open(os.path.join(self.img_paths["C"], self.img_lists["C"][idx]))
+        img_id = self.img_lists["A"][idx].split(".")[0]
+        
+        img_A_ori_idx, img_B_ori_idx, img_C_ori_idx = self.random_choice.choose()
+        
+        pil_A = Image.open(os.path.join(self.img_paths[img_A_ori_idx], self.img_lists["A"][idx]))
+        pil_B = Image.open(os.path.join(self.img_paths[img_B_ori_idx], self.img_lists["B"][idx]))
+        pil_C = Image.open(os.path.join(self.img_paths[img_C_ori_idx], self.img_lists["C"][idx]))
         tensor_A = self.transform(pil_A)
         tensor_B = self.transform(pil_B)
         tensor_C = self.transform(pil_C)
@@ -147,18 +154,14 @@ class MRI_dataset(Dataset):
         image_B = self.get_patches(tensor_B, patch_size, num_patches)
         image_C = self.get_patches(tensor_C, patch_size, num_patches)
         
-        images = [image_A, image_B, image_C]
-
-        if not self.check_input_seq(self.config.INPUT_MODALITIES):
+        if not self.check_input_seq(self.input_modalities):
             print("Invalid input modalities format")
             return None, None, None, None
-        
+     
+        # target_labels = get_ohe_label_vec(torch.tensor([img_C_ori_idx] * 4), 3)
+        in_out_comb = torch.tensor([img_A_ori_idx, img_B_ori_idx, img_C_ori_idx]).view(1,3).repeat(4, 1)
 
-        img_A_ori_idx, img_B_ori_idx, img_C_ori_idx = self.random_choice.choose()
-        images_A_shuffled, images_B_shuffled, images_C_shuffled = images[img_A_ori_idx], images[img_B_ori_idx], images[img_C_ori_idx]           
-        target_labels = get_ohe_label_vec(torch.tensor([img_C_ori_idx] * 4), 3)
-
-        return images_A_shuffled, images_B_shuffled, images_C_shuffled, target_labels, img_id
+        return image_A, image_B, image_C, in_out_comb, img_id
     
     def __len__(self): 
         return len(self.img_lists["A"])
@@ -169,16 +172,38 @@ if __name__ == "__main__":
 
     start_time = time.time()
 
-    train_data = MRI_dataset(config, train=True)
+    train_data = MRI_dataset(config.INPUT_MODALITIES, config.DATA_PNG_DIR, transform=True, train=True)
     print(len(train_data))
     train_loader = DataLoader(train_data, batch_size=config.BATCH_SIZE, shuffle=False, num_workers=4)
 
     for index, images_labels in enumerate(train_loader):
-        image_A, image_B, target_C, target_labels, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
-        image_A, image_B, target_C, target_labels = reshape_data(image_A, image_B, target_C, target_labels)
-        print(target_labels.shape)
+        image_A, image_B, target_C, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
+        print(in_out_comb.shape)
+        print(len(img_id))
+        print(type(img_id))
+        image_A, image_B, target_C, in_out_comb = reshape_data(image_A, image_B, target_C, in_out_comb)
+        print(in_out_comb.shape)
         break
-
+    
+    c = 0
+    for i, id in enumerate(img_id):
+        if c < 5:
+            print(i,": " + img_id[0])
+            c+=1
+    
+    print("---------")
+    print(in_out_comb[0])
+    print(in_out_comb[1])
+    print(in_out_comb[2])
+    print(in_out_comb[3])
+    print(in_out_comb[4])
+    print(in_out_comb[5])
+    print(in_out_comb[6])
+    print(in_out_comb[7])
+    print(in_out_comb[8])
+    print(in_out_comb[112])
+    print(in_out_comb[45])
+    print(in_out_comb[32])
     end_time = time.time()  
     
     

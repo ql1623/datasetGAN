@@ -98,6 +98,30 @@ def save_config(config, run_id, file_dir, dir_name, train=True):
         print("Testing Options saved to: ", save_path)
         
         
+def save_options(options, run_id, file_dir, dir_name, train=True):
+    if train:
+        save_path = os.path.join(file_dir, "chkpt_" + dir_name)
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+            
+        with open(os.path.join(save_path, "train_opt.txt"), 'a') as file:
+            file.write(f"================ Training Options {run_id} ================\n")
+            for arg, value in vars(options).items():
+                file.write(f"{arg}: {value}\n")
+        print("Training Options saved to: ", save_path)
+                    
+    else:
+        save_path = os.path.join(file_dir, dir_name + "_test")
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+            
+        with open(os.path.join(save_path, "test_opt.txt"), 'a') as file:
+            file.write(f"================ Testing Options {run_id} ================\n")
+            for arg, value in vars(options).items():
+                file.write(f"{arg}: {value}\n")
+        print("Testing Options saved to: ", save_path)
+
+
              
 def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real):
     save_path = os.path.join(log_dir, "chkpt_" + dir_name)
@@ -156,9 +180,11 @@ def load_checkpoint(model, optimizer, lr, checkpoint_dir, dir_name, epoch_num, g
     save_dir = os.path.join(checkpoint_dir, "chkpt_" + dir_name)
     if gen == True:
         save_path = os.path.join(save_dir, f"{epoch_num}_net_G.pth")
+        print("Loaded gen from: ", save_path)
     else:
         save_path = os.path.join(save_dir, f"{epoch_num}_net_D.pth")
-    print(save_path)
+        print("Loaded disc from: ", save_path)
+    
     if not os.path.exists(save_path):
         print("No such checkpoint is in this directory")
          
@@ -299,12 +325,13 @@ def save_image(tensor, png_save_path):
     png_image.save(png_save_path)
 
 
-def save_results(img_id, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
+def save_results_ori(img_id, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
     """Save images to a specified folder."""
     save_path = os.path.join(save_results_dir, dir_name + "_test", "images")
     if not os.path.exists(save_path):
         os.makedirs(save_path, exist_ok=True)
     
+    # need to add to output what output modality is, maybe use config.INPUT_MODALITIES to save the other 2 
     for index, img_filename in enumerate(img_id):
         id_str = img_filename
         
@@ -312,9 +339,67 @@ def save_results(img_id, image_A, image_B, pred_images, real_images, save_result
         save_image(image_B[index], os.path.join(save_path, f"{id_str}_real_B.png"))
         save_image(pred_images[index], os.path.join(save_path, f"{id_str}_fake_C.png"))
         save_image(real_images[index], os.path.join(save_path, f"{id_str}_real_C.png"))
+        
+            
+def save_results(img_id, in_out_comb, input_mod, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
+    """Save images to a specified folder."""
+    save_path = os.path.join(save_results_dir, dir_name + "_test", "images")
+    if not os.path.exists(save_path):
+        os.makedirs(save_path, exist_ok=True)
+    
+    modalities = input_mod.split("_")
+    modalities_map = {
+        0: modalities[0],
+        1: modalities[1],
+        2: modalities[2],
+    }
+    batch_in_out = in_out_comb[::4].cpu().numpy()
+    # import pdb; pdb.set_trace()
+    # need to add to output what output modality is, maybe use config.INPUT_MODALITIES to save the other 2 
+    for index, img_filename in enumerate(img_id):
+        id_str = img_filename
+        mod_A, mod_B, mod_C = modalities_map[batch_in_out[index][0]], modalities_map[batch_in_out[index][1]], modalities_map[batch_in_out[index][2]]
+        
+        save_image(image_A[index], os.path.join(save_path, f"{id_str}_real_A_{mod_A}.png"))
+        save_image(image_B[index], os.path.join(save_path, f"{id_str}_real_B_{mod_B}.png"))
+        save_image(pred_images[index], os.path.join(save_path, f"{id_str}_fake_C_{mod_C}.png"))
+        save_image(real_images[index], os.path.join(save_path, f"{id_str}_real_C_{mod_C}.png"))
 
 
 def generate_html(run_id, save_results_dir, dir_name):
+    """Generate an HTML file to view the images."""
+    save_images_path = os.path.join(save_results_dir, dir_name + "_test", "images")
+    save_html_path = os.path.join(save_results_dir, dir_name + "_test")
+    html_content = f"<html><body><h2>Testing Results {dir_name}</h2>"
+    pred_images = {}
+    
+    for filename in sorted(os.listdir(save_images_path)):
+        if filename.endswith(".png"):
+            img_id = "_".join(filename.split("_")[:-3])
+            # print(img_id)
+            if img_id not in pred_images:
+                pred_images[img_id] = []
+            pred_images[img_id].append(filename)
+    
+    # print(pred_images.keys())        
+    for img_id, files in pred_images.items():
+        html_content += f'<h3>{img_id}</h3>'
+        html_content += '<div style="display: flex;">'
+        img_sequence = ['real_A', 'real_B', 'fake_C', 'real_C']
+        for file in files:
+            for type in img_sequence:
+                if type in file:
+                    html_content += f'<div style="text-align: center; margin: 10px;">'
+                    html_content += f'<img src="images/{file}" style="max-width: 200px; display: block;"><br><p>{file}</p>'
+                    html_content += '</div>'
+        html_content += '</div><br>'
+    
+    html_content += "</body></html>"
+    
+    with open(os.path.join(save_html_path, f"{run_id}.html"), "w") as f:
+        f.write(html_content)
+
+def generate_html_ori(run_id, save_results_dir, dir_name):
     """Generate an HTML file to view the images."""
     save_images_path = os.path.join(save_results_dir, dir_name + "_test", "images")
     save_html_path = os.path.join(save_results_dir, dir_name + "_test")
@@ -458,6 +543,20 @@ class BalancedChooser:
         else: 
             self.remains - 1
         return next(self.iterator)
+
+class BalancedRandomChoice:
+    def __init__(self, items):
+        self.items = items
+        self.reset()
+    
+    def reset(self):
+        self.choices = self.items[:]
+        random.shuffle(self.choices)
+    
+    def choose(self):
+        if not self.choices:
+            self.reset()
+        return self.choices.pop()
     
 def get_data_for_input_mod(images, input_modalities):
     # images from dataloader are in: [image_A, image_B, image_C], images with size [batch_size, 4, 128, 128]
@@ -515,6 +614,10 @@ def get_data_for_input_mod(images, input_modalities):
 def get_ohe_label_vec(output_modality_num, num_classes):
     return F.one_hot(output_modality_num, num_classes)
 
+def in_out_to_ohe_label(in_out_combination, num_classes):
+    # import pdb; pdb.set_trace()
+    output_modality_num = torch.tensor([comb[num_classes-1] for comb in in_out_combination])
+    return F.one_hot(output_modality_num, num_classes)
 
 def get_data_for_input_mod_h5(images, input_modalities):
     # images from dataloader are in: [t1_slice, t1ce_slice, t2_slice, flair_slice], each with size [batch_size, 4, 128, 128]

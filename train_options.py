@@ -19,7 +19,8 @@ NUM_EPOCHS = 200
 NUM_LAYERS = 4
 NUM_FEATURES = 32
 CONDITION_METHOD = "add"
-GAN_VERSION = 2
+GAN_VERSION = 3
+DATASET_VERSION = 3
 
 LEARNING_RATE = 2e-4
 LR_START_EPOCH = 50
@@ -40,7 +41,7 @@ SAVE_MODEL = True
 LOG_INTERVAL = 5
 CHECKPOINT_INTERVAL = 5  
 
-SAVE_RESULTS_DIR_NAME = "t1_t2_flair_cgan_v2_2"
+SAVE_RESULTS_DIR_NAME = "t1_t2_flair_cgan_v2_3"
 # LOAD_RESULTS_DIR_NAME = "new_dataset"
 SAVE_CHECKPOINT_DIR = "/rds/general/user/ql1623/home/datasetGAN/checkpoints"
 SAVE_RESULTS_DIR = "/rds/general/user/ql1623/home/datasetGAN/results"
