@@ -123,7 +123,7 @@ def save_options(options, run_id, file_dir, dir_name, train=True):
 
 
              
-def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real):
+def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real):
     save_path = os.path.join(log_dir, "chkpt_" + dir_name)
     if not os.path.exists(save_path):
         os.makedirs(save_path)
@@ -135,7 +135,7 @@ def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, los
             # Write header if the it is start of training
             file.write(f"================ Training Loss {run_id} ================\n")
             file.write(f"epoch:\tG_BCE\t\tG_L1\t\tG_reA\t\tG_reB\t\tD_fake\t\tD_real\n")
-        file.write(f"{epoch}\t\t{loss_G_BCE:.6f}\t{loss_G_L1:.6f}\t{loss_G_reconA:.6f}\t{loss_G_reconB:.6f}\t{loss_D_fake:.6f}\t{loss_D_real:.6f}\n")
+        file.write(f"{epoch}\t\t{loss_G_BCE:.6f}\t{loss_G_L1:.6f}\t{loss_G_reconA:.6f}\t{loss_G_reconB:.6f}\t{loss_G_GDL:.6f}\t{loss_D_fake:.6f}\t{loss_D_real:.6f}\n")
         file.flush() 
 
 def log_loss_to_json(log_dir, dir_name, run_id, epoch, losses):
@@ -688,6 +688,30 @@ def reshape_data(image_A, image_B, image_C, target_labels):
     
 #     return out_mod_ohe_label
 
+
+class GradientDifferenceLoss(nn.Module):
+    def __init__(self):
+        super(GradientDifferenceLoss, self).__init__()
+        
+        self.sobel_h = torch.tensor([[-1, 0, 1],[-2, 0, 2],[-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0) # make [1,1,3,3]
+        self.sobel_w = torch.tensor([[-1, -2, -1],[0, 0, 0],[1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        
+    def forward(self, pred, target):
+        self.sobel_h = self.sobel_h.to(target.device)
+        self.sobel_w = self.sobel_w.to(target.device)
+        
+        pred_grad_h = F.conv2d(pred, self.sobel_h, padding=1)
+        pred_grad_w = F.conv2d(pred, self.sobel_w, padding=1)
+        
+        target_grad_h = F.conv2d(target, self.sobel_h, padding=1)
+        target_grad_w = F.conv2d(target, self.sobel_w, padding=1)
+        
+        grad_diff_h = torch.mean((target_grad_h - pred_grad_h)**2)
+        grad_diff_w = torch.mean((target_grad_w - pred_grad_w)**2)
+        
+        return grad_diff_h + grad_diff_w
+
+    
 if __name__ == "__main__":
     from datasetGAN import train_options as config
     from torch.utils.data import DataLoader

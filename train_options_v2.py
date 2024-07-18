@@ -33,6 +33,7 @@ class TrainOptions:
         self.parser.add_argument('--lambda_gan_l1', type=float, default=1)
         self.parser.add_argument('--lambda_bce', type=float, default=0.1)
         self.parser.add_argument('--lambda_recon', type=float, default=1)
+        self.parser.add_argument('--lambda_gdl', type=float, default=1)
         self.parser.add_argument('--b1', type=float, default=0.5)
         self.parser.add_argument('--b2', type=float, default=0.999)
         self.parser.add_argument('--dropout', type=float, default=0.5)

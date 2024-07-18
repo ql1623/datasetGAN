@@ -73,6 +73,7 @@ if __name__ == "__main__":
 
     criterion_GAN = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
+    criterion_GDL = GradientDifferenceLoss()
     
     dataset_version = options.DATASET_VERSION
     if dataset_version == 1:
@@ -92,8 +93,8 @@ if __name__ == "__main__":
     # save_config(config, run_id, options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, train=True)
     
     
-    # for epoch in range(options.NUM_EPOCHS):
-    for epoch in range(1):
+    for epoch in range(options.NUM_EPOCHS):
+    # for epoch in range(1):
         
         loop = tqdm(train_loader, leave=True)
         epoch_losses = []
@@ -101,20 +102,20 @@ if __name__ == "__main__":
             if dataset_version == 1:
                 images = images_labels[0:3]
                 img_id = images_labels[3]
-                image_A, image_B, target_C, target_labels = get_data_for_input_mod(images, options.INPUT_MODALITIES)
+                image_A, image_B, real_target_C, target_labels = get_data_for_input_mod(images, options.INPUT_MODALITIES)
                 
             elif dataset_version == 2:           
-                image_A, image_B, target_C, target_labels, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
-                image_A, image_B, target_C, target_labels = reshape_data(image_A, image_B, target_C, target_labels)
+                image_A, image_B, real_target_C, target_labels, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
+                image_A, image_B, real_target_C, target_labels = reshape_data(image_A, image_B, real_target_C, target_labels)
                 
             elif dataset_version == 3:           
-                image_A, image_B, target_C, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
+                image_A, image_B, real_target_C, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
                 # import pdb; pdb.set_trace()
-                image_A, image_B, target_C, in_out_comb = reshape_data(image_A, image_B, target_C, in_out_comb)
+                image_A, image_B, real_target_C, in_out_comb = reshape_data(image_A, image_B, real_target_C, in_out_comb)
                 in_out_comb = in_out_comb.to(options.DEVICE)
                 target_labels = in_out_to_ohe_label(in_out_comb, 3)
                 
-            image_A, image_B, target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
+            image_A, image_B, real_target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
             
             x_concat = torch.cat((image_A, image_B), dim=1)
             target_fake, image_A_recon, image_B_recon = gen(x_concat, target_labels)
@@ -129,7 +130,7 @@ if __name__ == "__main__":
             loss_D_fake = criterion_GAN(pred_disc_fake, torch.zeros_like(pred_disc_fake))
             
             # -- Disc loss for real --
-            pred_disc_fake = disc(target_C, target_labels)
+            pred_disc_fake = disc(real_target_C, target_labels)
             loss_D_real = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
             
             # get both loss and backprop
@@ -146,17 +147,19 @@ if __name__ == "__main__":
             
             # loss for GAN
             loss_G_BCE = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
-            loss_G_L1 = criterion_L1(target_fake, target_C) * options.LAMBDA_GAN_L1
+            loss_G_L1 = criterion_L1(target_fake, real_target_C) * options.LAMBDA_GAN_L1
             
             # loss for reconstucting unet
             loss_G_reconA = criterion_L1(image_A_recon, image_A)
             loss_G_reconB = criterion_L1(image_B_recon, image_B)
             
+            # loss for gradient difference between pred and real
+            loss_G_GDL = criterion_GDL(target_fake, real_target_C)
             # options.LAMBDA_BCE = 10
             # options.LAMBDA_RECON = 1
             
             # loss_G = 20*loss_G_BCE + 100*loss_G_L1 + 20*loss_G_reconA + 20*loss_G_reconB 
-            loss_G = options.LAMBDA_BCE*loss_G_BCE + loss_G_L1 + options.LAMBDA_RECON*loss_G_reconA + options.LAMBDA_RECON*loss_G_reconB
+            loss_G = options.LAMBDA_BCE*loss_G_BCE + loss_G_L1 + options.LAMBDA_RECON*loss_G_reconA + options.LAMBDA_RECON*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL
             loss_G.backward()
             opt_gen.step()
 
@@ -169,6 +172,7 @@ if __name__ == "__main__":
                 "batch": index+1,
                 "G_GAN": loss_G_BCE.item(),
                 "G_L1": loss_G_L1.item(),
+                "G_GDL": loss_G_GDL.item(),
                 "D_real": loss_D_real.item(),
                 "D_fake": loss_D_fake.item(),
             }
@@ -178,7 +182,7 @@ if __name__ == "__main__":
         scheduler_gen.step()
          
         log_loss_to_json(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, epoch_losses)
-        log_loss_to_txt(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_D_fake, loss_D_real)
+        log_loss_to_txt(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real)
            
         if options.SAVE_MODEL:
             if (epoch+1) > 5 and (epoch+1) % options.CHECKPOINT_INTERVAL == 0:
