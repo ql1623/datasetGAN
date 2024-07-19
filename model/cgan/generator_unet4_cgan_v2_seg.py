@@ -19,9 +19,6 @@ class ConvBlock(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(out_channels) if norm=="batch" else nn.InstanceNorm2d(out_channels),
             nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
-            # nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
-            # nn.BatchNorm2d(out_channels) if norm=="batch" else nn.InstanceNorm2d(out_channels),
-            # nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
         )
 
         self.use_dropout = use_dropout
@@ -34,7 +31,38 @@ class ConvBlock(nn.Module):
         else:
             return x
 
+class DoubleConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, act_fn="leaky", norm="batch", use_dropout=False):
+        """Convolution Block for a Double Convolution operation
+        
+        Parameters:
+            in_channels (int)  : the number of channels from input images.
+            out_channels (int) : the number of channels in output images.
+            act_fn (str)       : the activation function: leakyReLU | ReLU.
+            norm (str)         : the type of normalization: batch | instance.
+            use_dropout (bool) : if dropout is used
+        """
+        super(DoubleConvBlock, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels) if norm=="batch" else nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(out_channels) if norm=="batch" else nn.InstanceNorm2d(out_channels),
+            nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
+        )
 
+        self.use_dropout = use_dropout
+        self.dropout = nn.Dropout(0.5)
+    
+    def forward(self, x):
+        x = self.conv(x)
+        if self.use_dropout:
+            return self.dropout(x)
+        else:
+            return x
+      
+        
 class SamplingBlock(nn.Module):
     def __init__(self, in_channels, out_channels, down=True, act_fn="leaky", norm="batch", use_dropout=False):
         """Convolution Block for upsampling / downsampling
@@ -67,44 +95,184 @@ class SamplingBlock(nn.Module):
 
 
 class FusionBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, groups, act_fn="leaky", norm="batch"):
+    def __init__(self, in_channels, out_channels, groups, act_fn="leaky", norm="batch", initial=False):
         """Fuse same-level feature layers of different modalities
 
         Parameters:
             in_channels (int)  : the number of channels from each modality input images.
             out_channels (int) : the number of channels in fused output images.
             groups (int)       : the number of groups to separate data into and perform conv with.
-            initial (bool)     : if it is the first fusion block (as first will not have previous fused representation to be merge with).
             act_fn (str)       : the activation function: leakyReLU | ReLU.
             norm (str)         : the type of normalization: batch | instance.
+            initial (bool)     : if it is the first fusion block (as first will not have previous fused representation to be merge with).
         """
         super(FusionBlock, self).__init__()
         # self.initial = initial
         
+        self.initial = initial
         # conv 3d to merge representation of same-level feature layers from both modality
         self.group_conv =  nn.Sequential(
             nn.Conv3d(in_channels, out_channels, kernel_size=(2, 3, 3), padding=(0, 1, 1), groups=groups),
+            # nn.Conv3d(in_channels, out_channels, kernel_size=(2 if initial else 2, 3, 3), padding=(0, 1, 1), groups=groups),
             # nn.Conv3d(in_channels, in_channels, kernel_size=(3, 3, 3), padding=(0, 1, 1), groups=groups), for if want like unet in fusion net as well?
             nn.BatchNorm3d(out_channels) if norm=="batch" else nn.InstanceNorm3d(out_channels),
             nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
         )
-
-    def forward(self, x1, x2):
+        
+    def forward(self, x1, x2): #, condition=None
         # concat in new dim
-        x = torch.stack([x1, x2], dim=1) # [B, C, H, W] --> [B, stack, C, H, W] = [B, stack=2, C=64, H, W]
+        # if self.initial: 
+        #     if condition is not None:
+        #         condition = (condition.unsqueeze(2).unsqueeze(3)).repeat(1, 1, x1.shape[2], x1.shape[3]) # [B, C] --> [B, C=3, H, W]
+        #         x = torch.stack((x1, x2, condition), dim=2) # [B, C, H, W] --> [B, C, stack, H, W] = [B, C=256, stack=2+1, H, W]
+        # else:
+        x = torch.stack((x1, x2), dim=2) # [B, C, H, W] --> [B, C, stack, H, W] = [B, C=256, stack=2, H, W]
+        # if condition:  # condition = [B, C=256, stack=3, feat_img_size, feat_img_size]
+        #     x = torch.cat((x,condition), dim=2)
         # then swap new dim with channel dim
-        x = x.permute(0, 2, 1, 3, 4).contiguous() # [B, stack=2, C=64, H, W] --> [B, C=64, stack=2, H, W], then conv3d on [stack=2, H, W]
+        # x = x.permute(0, 2, 1, 3, 4).contiguous() # [B, stack=2, C=256, H, W] --> [B, C=256, stack=2+1, H, W], then conv3d on [stack=2+1, H, W]
         # implement the conv3d defined 
         x = self.group_conv(x)
         x = x.squeeze(2)
         return x
     
+    
+class FusionBlock_with_cond(nn.Module):
+    def __init__(self, in_channels, out_channels, groups, act_fn="leaky", norm="batch", is_separate=False):
+        """Fuse same-level feature layers of different modalities
 
+        Parameters:
+            in_channels (int)  : the number of channels from each modality input images.
+            out_channels (int) : the number of channels in fused output images.
+            groups (int)       : the number of groups to separate data into and perform conv with.
+            act_fn (str)       : the activation function: leakyReLU | ReLU.
+            norm (str)         : the type of normalization: batch | instance.
+            is_separate (bool) : if the condition features are processed separately before inputting to current fusion
+        """
+        super(FusionBlock_with_cond, self).__init__()
+        # self.initial = initial
+        
+        self.is_separate = is_separate
+        # conv 3d to merge representation of same-level feature layers from both modality
+        self.group_conv =  nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=(5, 3, 3), padding=(0, 1, 1), groups=groups) if self.is_separate
+            else nn.Conv3d(in_channels, out_channels, kernel_size=(3, 3, 3), padding=(0, 1, 1), groups=groups),
+            nn.BatchNorm3d(out_channels) if norm=="batch" else nn.InstanceNorm3d(out_channels),
+            nn.LeakyReLU(0.2, inplace=True) if act_fn=="leaky" else nn.ReLU(inplace=True),
+        )
+        
+    def forward(self, x1, x2, condition):
+        # concat in new dim
+        # condition = [B, C=256, stack=3, feat_img_size, feat_img_size] if is_separate=True
+        # condition = [B, C=256, feat_img_size, feat_img_size] if is_separate=False
+        if self.is_separate:  # condition = [B, C=256, stack=3, feat_img_size, feat_img_size]
+            x = torch.stack((x1, x2), dim=2) # [B, C, H, W] --> [B, C, stack, H, W] = [B, C=256, stack=2, H, W]
+            x = torch.cat((x,condition), dim=2)
+        else:
+            x = torch.stack((x1, x2, condition), dim=2)
+        # then swap new dim with channel dim
+        # x = x.permute(0, 2, 1, 3, 4).contiguous() # [B, stack=2, C=256, H, W] --> [B, C=256, stack=2+1, H, W], then conv3d on [stack=2+1, H, W]
+        # implement the conv3d defined 
+        x = self.group_conv(x)
+        x = x.squeeze(2)
+        return x
+
+class ConditionalBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, feat_img_size, num_output_comb, has_act_fn=False, is_linear=False): 
+        """Transform labels into feature channels to be added to intermediate feautures channels in model
+        Note: if embedding layer is chosen, labels need to be pure class labels and not one-hot encoded labels
+
+        Parameters:
+            in_channels (int): num channels for labels, ohe_labels = num_modalities, mod_labels = 1
+            out_channels (int): num channels in intermediate feautures channels in model
+            feat_img_size (int): height and width dims of intermediate feautures channels in model
+            num_output_comb (int): number of possible output condition (for embedding layer)
+            has_act_fn (bool, optional): if it needs activation function. Defaults to False.
+            is_linear (bool, optional): to use linear or embedding layer to transform labels. Defaults to False.
+        """
+        super(ConditionalBlock,self).__init__()
+        self.out_channels = out_channels
+        self.feat_img_size = feat_img_size
+        self.is_linear = is_linear
+        self.has_act_fn = has_act_fn
+        
+        layers = []
+        if self.has_act_fn:
+            layers.append(nn.LeakyReLU(0.2))
+            
+        layers.append(
+            nn.Linear(in_channels, out_channels * self.feat_img_size * self.feat_img_size) if self.is_linear
+            else nn.Embedding(num_output_comb, out_channels * self.feat_img_size * self.feat_img_size)
+        )
+        self.cond = nn.Sequential(*layers)
+        
+    def forward(self, condition):
+        # batch_size = condition.shape[0]
+        return self.cond(condition.float()).view(condition.shape[0], self.out_channels, self.feat_img_size, self.feat_img_size)
+        
+
+class ConditionalBlock_v2(nn.Module):
+    def __init__(self, in_channels, out_channels, feat_img_size, is_separate=False): 
+        """Transform labels into feature channels to be added to intermediate feautures channels in model
+        Note: if embedding layer is chosen, labels need to be pure class labels and not one-hot encoded labels
+
+        Parameters:
+            in_channels (int): num channels for labels, ohe_labels = num_modalities, mod_labels = 1
+            out_channels (int): num channels in intermediate feautures channels in model
+            feat_img_size (int): height and width dims of intermediate feautures channels in model
+            num_output_comb (int): number of possible output condition (for embedding layer)
+            has_act_fn (bool, optional): if it needs activation function. Defaults to False.
+            is_linear (bool, optional): to use linear or embedding layer to transform labels. Defaults to False.
+        """
+        super(ConditionalBlock_v2,self).__init__()
+        self.out_channels = out_channels
+        self.feat_img_size = feat_img_size
+        # self.has_act_fn = has_act_fn
+        self.is_separate = is_separate
+        
+        # repeat()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_channels, self.out_channels, kernel_size=3, stride=1, padding=1), # out_channels should be 256
+            nn.LeakyReLU(0.2, inplace=True)
+            )
+        
+    def forward(self, condition):
+        # condition = [B, C=3] 3 as one hot 
+        condition = condition.unsqueeze(2).unsqueeze(3).repeat(1, 1, self.feat_img_size, self.feat_img_size) # [B, C=3] --> [B, C=3, feat_img_size, feat_img_size]
+        # condition = condition.repeat(1, 1, self.feat_img_size, self.feat_img_size) # [B, C=3, 1, 1] --> [B, C=3, feat_img_size, feat_img_size]
+        
+        # batch_size = condition.shape[0]
+        if self.is_separate: # if is separate, in_channels should be 1
+            # [B, C=1, feat_img_size, feat_img_size] --> [B, C=256, feat_img_size, feat_img_size]
+            condition_0 = self.conv(condition[:,0,:,:].view(condition.shape[0], 1, self.feat_img_size, self.feat_img_size)) # [B, C=256, feat_img_size, feat_img_size]
+            condition_1 = self.conv(condition[:,1,:,:].view(condition.shape[0], 1, self.feat_img_size, self.feat_img_size)) # [B, C=256, feat_img_size, feat_img_size]
+            condition_2 = self.conv(condition[:,2,:,:].view(condition.shape[0], 1, self.feat_img_size, self.feat_img_size)) # [B, C=256, feat_img_size, feat_img_size]
+            condition = torch.stack((condition_0, condition_1, condition_2), dim=2) # [B, C=256, stack=3, feat_img_size, feat_img_size]
+            
+        else: # else, in_channels should be 3
+            condition = self.conv(condition) # [B, C=3, feat_img_size, feat_img_size] --> [B, C=256, feat_img_size, feat_img_size] to be same as fusion feat to stack 
+        return condition
+
+# class SegmentationBlock(nn.Module):
+#     def __init__(self, in_channels, out_channels, features):
+#         super(SegmentationBlock, self).__init__()
+#         self.in_channels = in_channels
+#         self.out_channels = out_channels
+#         self.features = features
+        
+#         self.conv = nn.Sequential(
+#             ConvBlock(self.in_channels, features, act_fn="leaky", norm="batch", use_dropout=False)
+#         )
+        
+#     def forward(self, ):
+#         return 
+
+      
 # ---------------------------------------------------------------------------------
 # =========== define model architecture ============ #
 class datasetGAN(nn.Module):
     """ Defining Generator of the model """
-    def __init__(self, input_channels, output_channels, ngf): # input_channels = 1, output_channel = 1, ngf = 64/32 , features = [16,32,64,128]
+    def __init__(self, input_channels, output_channels, ngf, version): # input_channels = 1, output_channel = 1, ngf = 64/32 , features = [16,32,64,128]
         """Generator with UNET and Fusion Network 
 
         Parameters:
@@ -117,13 +285,13 @@ class datasetGAN(nn.Module):
         self.input_channels = input_channels
         self.features = ngf
         self.output_channels = output_channels
+        self.version = version
         
         # -------- Modality Encoder - Modality 1 -------- 
         # encoding path
         self.down1_mod1 = ConvBlock(in_channels=self.input_channels, out_channels=self.features, act_fn="leaky", norm="batch", use_dropout=False)
         # self.down1_mod1 = ConvBlock(in_channels=self.input_channels*2, out_channels=self.features, act_fn="leaky", norm="batch", use_dropout=False)
         # in_channels=self.input_channels * 2 as adding in labels for cgan
-        
         self.pool1_mod1 = SamplingBlock(in_channels=self.features, out_channels=self.features, down=True, act_fn="leaky", norm="batch", use_dropout=False)
         
         self.down2_mod1 = ConvBlock(in_channels=self.features, out_channels=self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
@@ -202,7 +370,27 @@ class datasetGAN(nn.Module):
         # --------------- fusion network ---------------
         # encoding path       
         # decoding path
-        self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch")
+        
+        # condition part
+        if self.version == 1:
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
+        elif self.version == 2:
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
+        elif self.version == 3:
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
+        elif self.version == 4:
+            self.cond_v2 = ConditionalBlock_v2(in_channels=1, out_channels=self.features*8, feat_img_size=8, is_separate=True)
+            self.fusion0 = FusionBlock_with_cond(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", is_separate=True)
+        elif self.version == 5:
+            self.cond_v2 = ConditionalBlock_v2(in_channels=3, out_channels=self.features*8, feat_img_size=8, is_separate=False)
+            self.fusion0 = FusionBlock_with_cond(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", is_separate=False)
+        else:
+            raise Exception("version specified is wrong")
+        
+        # self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         self.fusion_up0 = SamplingBlock(self.features*8, self.features*8, down=False, act_fn="relu", norm="batch", use_dropout=False)
         
         self.fusion1 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch")
@@ -220,6 +408,9 @@ class datasetGAN(nn.Module):
         self.fusion4 = FusionBlock(self.features*1, self.features*1, groups=self.features*1, act_fn="relu", norm="batch")
         self.fusion_conv4 = ConvBlock(self.features*2*1, self.features*1, act_fn="relu", norm="batch", use_dropout=False)
 
+        # whether to add one more conv so input to seg is lower 
+        # self.fusion_conv5 = ConvBlock(self.features, out_channels=16, act_fn="relu", norm="batch", use_dropout=False)
+
         self.fusion_final_conv = nn.Sequential(
             # nn.Conv2d(self.features, self.features/2, kernel_size=3, stride=1, padding=1),
             # nn.ReLU(inplace=True)
@@ -227,7 +418,36 @@ class datasetGAN(nn.Module):
             nn.Tanh()
         )
         
-    def forward(self,inputs):
+        # segmentation network
+        # no initial conv as use feat before finalconv of fusion
+        self.seg_conv_1 = DoubleConvBlock(self.features, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_down_1 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.seg_conv_2 = DoubleConvBlock(self.features*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_down_2 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.seg_conv_3 = DoubleConvBlock(self.features*4, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_down_3 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.seg_bottleneck = nn.Sequential(
+            nn.Conv2d(self.features*8, self.features*8*2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.features*8*2),    
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        
+        self.seg_up_1 = nn.ConvTranspose2d(self.features*8*2, self.features*8, kernel_size=2, stride=2)
+        self.seg_upconv_1 = DoubleConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+
+        self.seg_up_2 = nn.ConvTranspose2d(self.features*8, self.features*4, kernel_size=2, stride=2)
+        self.seg_upconv_2 = DoubleConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+
+        self.seg_up_3 = nn.ConvTranspose2d(self.features*4, self.features*2, kernel_size=2, stride=2)
+        self.seg_upconv_3 = DoubleConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+
+        self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=3, stride=1, padding=1)
+        # self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=1, stride=1, padding=1)
+        
+    def forward(self, inputs, condition):
         # import pdb; pdb.set_trace()
         # inputs.shape = [128,2,128,128] = [batch_size*num_patches, num_modality, H, W]   
 
@@ -327,7 +547,26 @@ class datasetGAN(nn.Module):
         # out_x2 = self.final_conv_mod2(upconv3_x2)
         
         # ----- fusion part (for decoding path) -----
-        fusion_0 = self.fusion0(bottleneck_x1, bottleneck_x2)
+        if self.version == 1:
+            condition_feat = self.cond(condition)
+            fusion_0 = self.fusion0(bottleneck_x1 + condition_feat, bottleneck_x2 + condition_feat)
+            
+        elif self.version == 2:
+            condition_feat = self.cond(condition)
+            fusion_0 = self.fusion0(bottleneck_x1 + condition_feat[:, 0:self.features*8, :, :], bottleneck_x2 + condition_feat[:, self.features*8:, :, :])
+        
+        elif self.version == 3:
+            condition_feat = self.cond(condition)
+            fusion_0_pre = self.fusion0(bottleneck_x1, bottleneck_x2)
+            fusion_0 = fusion_0_pre + condition_feat
+        
+        elif self.version == 4:
+            condition_feat = self.cond_v2(condition) # [B, C=256, stack=3, feat_img_size, feat_img_size]
+            fusion_0 = self.fusion0(bottleneck_x1, bottleneck_x2, condition_feat)
+        
+        elif self.version == 5:
+            condition_feat = self.cond_v2(condition)
+            fusion_0 = self.fusion0(bottleneck_x1, bottleneck_x2, condition_feat)
         fusion_upsamp0 = self.fusion_up0(fusion_0)
         
         fusion_1 = self.fusion1(upconv1_x1, upconv1_x2)
@@ -348,7 +587,34 @@ class datasetGAN(nn.Module):
         out_fusion = self.fusion_final_conv(fusion_merge4)
         # out_fusion = self.fusion_final_conv(fusion_merge3)
         
-        return out_fusion, out_x1, out_x2
+        # segmentation branch 
+        seg_skip_connection = []
+        seg_conv_fu1 = self.seg_conv_1(fusion_merge4)
+        seg_skip_connection.append(seg_conv_fu1)
+        seg_down_fu1 = self.seg_down_1(seg_conv_fu1)
+        
+        seg_conv_fu2 = self.seg_conv_2(seg_down_fu1)
+        seg_skip_connection.append(seg_conv_fu2)
+        seg_down_fu2 = self.seg_down_2(seg_conv_fu2)
+        
+        seg_conv_fu3 = self.seg_conv_3(seg_down_fu2)
+        seg_skip_connection.append(seg_conv_fu3)
+        seg_down_fu3 = self.seg_down_3(seg_conv_fu3)
+        
+        seg_bottleneck_fu = self.seg_bottleneck(seg_down_fu3)
+        
+        seg_up_fu1 = self.seg_up_1(seg_bottleneck_fu)
+        seg_upconv_fu1 = self.seg_upconv_1(torch.cat((seg_up_fu1, seg_skip_connection[2]), dim=1))
+        
+        seg_up_fu2 = self.seg_up_2(seg_upconv_fu1)
+        seg_upconv_fu2 = self.seg_upconv_2(torch.cat((seg_up_fu2, seg_skip_connection[1]), dim=1))
+        
+        seg_up_fu3 = self.seg_up_3(seg_upconv_fu2)
+        seg_upconv_fu3 = self.seg_upconv_3(torch.cat((seg_up_fu3, seg_skip_connection[0]), dim=1))
+        
+        seg_output = torch.sigmoid(self.seg_final_conv(seg_upconv_fu3))
+        
+        return out_fusion, out_x1, out_x2, seg_output
  
 
 
@@ -385,8 +651,10 @@ class Discriminator(nn.Module):
         """
         super(Discriminator, self).__init__()
 
+        self.cond = ConditionalBlock(3, out_channels=1, feat_img_size=128, num_output_comb=3, has_act_fn=False, is_linear=True)
+        
         self.intitial_conv = nn.Sequential(
-            nn.Conv2d(in_channels, features[0], kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(in_channels + 1, features[0], kernel_size=3, stride=2, padding=1),
             # nn.Conv2d(in_channels*2, features[0], kernel_size=3, stride=2, padding=1), # if cond. GAN
             nn.LeakyReLU(0.2, inplace=True)
         )
@@ -402,8 +670,9 @@ class Discriminator(nn.Module):
         
         self.disc = nn.Sequential(*layers)
 
-    def forward(self, x):
-        x = self.intitial_conv(x)
+    def forward(self, x, condition):
+        condition = self.cond(condition) # [B, C] --> [B, C=1, H, W]
+        x = self.intitial_conv(torch.cat((x, condition), 1))
         return self.disc(x)    
 
 def test():
@@ -419,8 +688,13 @@ def test():
     # print(pred_x2.shape)
     # print(preds_disc.shape)
 
-    model = datasetGAN(1,1,32)
-    summary(model, (2, 128, 128)) 
+    model = datasetGAN(1,1,32, version=4)
+    summary(model, [(2, 128, 128),  (3, )]) 
+    
+    # model = Discriminator(in_channels=1, features=[32,64,128,256,512])
+    # summary(model, [(1, 128, 128),  (3, )]) 
+    
+    
     
 
 if __name__ == "__main__":
@@ -488,3 +762,58 @@ if __name__ == "__main__":
 # Forward/backward pass size (MB): 143.38
 # Params size (MB): 56.00
 # Estimated Total Size (MB): 199.50
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 1
+# Total params: 14,746,691
+# Trainable params: 14,746,691
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.50
+# Params size (MB): 56.25
+# Estimated Total Size (MB): 199.88
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 2
+# Total params: 14,812,227
+# Trainable params: 14,812,227
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.62
+# Params size (MB): 56.50
+# Estimated Total Size (MB): 200.25
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 3
+# Total params: 14,746,691
+# Trainable params: 14,746,691
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.50
+# Params size (MB): 56.25
+# Estimated Total Size (MB): 199.88
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using concar, version 4
+# Total params: 14,690,627
+# Trainable params: 14,690,627
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.50
+# Params size (MB): 56.04
+# Estimated Total Size (MB): 199.67
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using concar, version 5
+# Total params: 14,690,627
+# Trainable params: 14,690,627
+# Non-trainable params: 0
+# Total mult-adds (G): 10.40
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 143.50
+# Params size (MB): 56.04
+# Estimated Total Size (MB): 199.67

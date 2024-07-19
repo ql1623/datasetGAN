@@ -261,7 +261,7 @@ def patches_to_images(pred_patches, real_patches, image_ori_shape, num_patches):
     return pred_images, real_images
 
 
-def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir, dir_name): # pred_images and real_images [32,1,160,200]
+def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir, dir_name): # pred_images and real_images [32,1,200,200]
     
     batch_size = pred_images.shape[0]
     error_metrics= {
