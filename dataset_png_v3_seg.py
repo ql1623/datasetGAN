@@ -46,8 +46,17 @@ class BalancedRandomChoice:
         if not self.choices:
             self.reset()
         return self.choices.pop()
+
+class Make_binary:
+    def __call__(self, image):
+        # make seg mask binary
+        return torch.where(image != 0, torch.tensor(1.0), torch.tensor(0.0))
+  
         
-        
+class Norm_tanh:
+    def __call__(self, image):
+        # make seg mask binary
+        return 
         
 class MRI_dataset(Dataset):
     def __init__(self, input_modalities, data_png_dir, transform=True, train=True):
@@ -64,17 +73,26 @@ class MRI_dataset(Dataset):
             1: os.path.join(self.data_png_dir, mod_B, 'train' if train else 'test'),
             2: os.path.join(self.data_png_dir, mod_C, 'train' if train else 'test')
         }
+        self.seg_img_paths = os.path.join(self.data_png_dir, "seg", 'train' if train else 'test')
+        
         self.img_lists = {
             'A': os.listdir(self.img_paths[0]),
             'B': os.listdir(self.img_paths[1]),
             'C': os.listdir(self.img_paths[2])
         }
+        self.seg_img_lists = os.listdir(self.seg_img_paths)
         
         if transform:
             self.transform = transforms.Compose([
                 transforms.ToTensor(), # already normalize the image to [0, 1]
                 transforms.Normalize(mean=[0.5], std=[0.5]) # then normalize the image to [-1, 1]
-            ])        
+            ])   
+            
+            self.seg_transform = transforms.Compose([
+                transforms.ToTensor(), # already normalize the image to [0, 1]
+                Make_binary(),
+                # transforms.Normalize(mean=[0.5], std=[0.5]) # then normalize the image to [-1, 1]
+            ])       
         
         self.valid_triplets = [
             "t1_t1ce_t2",
@@ -146,13 +164,16 @@ class MRI_dataset(Dataset):
         pil_A = Image.open(os.path.join(self.img_paths[img_A_ori_idx], self.img_lists["A"][idx]))
         pil_B = Image.open(os.path.join(self.img_paths[img_B_ori_idx], self.img_lists["B"][idx]))
         pil_C = Image.open(os.path.join(self.img_paths[img_C_ori_idx], self.img_lists["C"][idx]))
+        pil_seg = Image.open(os.path.join(self.seg_img_paths, self.seg_img_lists[idx]))
         tensor_A = self.transform(pil_A)
         tensor_B = self.transform(pil_B)
         tensor_C = self.transform(pil_C)
+        tensor_seg = self.seg_transform(pil_seg)
         
         image_A = self.get_patches(tensor_A, patch_size, num_patches)
         image_B = self.get_patches(tensor_B, patch_size, num_patches)
         image_C = self.get_patches(tensor_C, patch_size, num_patches)
+        image_seg = self.get_patches(tensor_seg, patch_size, num_patches)
         
         if not self.check_input_seq(self.input_modalities):
             print("Invalid input modalities format")
@@ -161,7 +182,7 @@ class MRI_dataset(Dataset):
         # target_labels = get_ohe_label_vec(torch.tensor([img_C_ori_idx] * 4), 3)
         in_out_comb = torch.tensor([img_A_ori_idx, img_B_ori_idx, img_C_ori_idx]).view(1,3).repeat(4, 1)
 
-        return image_A, image_B, image_C, in_out_comb, img_id
+        return image_A, image_B, image_C, image_seg, in_out_comb, img_id
     
     def __len__(self): 
         return len(self.img_lists["A"])
@@ -177,7 +198,7 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_data, batch_size=config.BATCH_SIZE, shuffle=False, num_workers=4)
 
     for index, images_labels in enumerate(train_loader):
-        image_A, image_B, target_C, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
+        image_A, image_B, target_C, image_seg, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4], images_labels[5]
         print(in_out_comb.shape)
         print(len(img_id))
         print(type(img_id))
@@ -187,29 +208,35 @@ if __name__ == "__main__":
         print(image_A[0].max())
         print("---------")
         
-        image_A, image_B, target_C, in_out_comb = reshape_data(image_A, image_B, target_C, in_out_comb)
+        print(image_seg.shape)
+        print(type(image_seg))
+        print(image_seg[0].min())
+        print(image_seg[0].max())
+        print("---------")
+        
+        image_A, image_B, target_C, image_seg, in_out_comb = reshape_data_seg(image_A, image_B, target_C, image_seg, in_out_comb)
         print(in_out_comb.shape)
         break
     
-    c = 0
-    for i, id in enumerate(img_id):
-        if c < 5:
-            print(i,": " + img_id[0])
-            c+=1
+    # c = 0
+    # for i, id in enumerate(img_id):
+    #     if c < 5:
+    #         print(i,": " + img_id[0])
+    #         c+=1
     
-    print("---------")
-    print(in_out_comb[0])
-    print(in_out_comb[1])
-    print(in_out_comb[2])
-    print(in_out_comb[3])
-    print(in_out_comb[4])
-    print(in_out_comb[5])
-    print(in_out_comb[6])
-    print(in_out_comb[7])
-    print(in_out_comb[8])
-    print(in_out_comb[112])
-    print(in_out_comb[45])
-    print(in_out_comb[32])
+    # print("---------")
+    # print(in_out_comb[0])
+    # print(in_out_comb[1])
+    # print(in_out_comb[2])
+    # print(in_out_comb[3])
+    # print(in_out_comb[4])
+    # print(in_out_comb[5])
+    # print(in_out_comb[6])
+    # print(in_out_comb[7])
+    # print(in_out_comb[8])
+    # print(in_out_comb[112])
+    # print(in_out_comb[45])
+    # print(in_out_comb[32])
     end_time = time.time()  
     
     

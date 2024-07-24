@@ -95,9 +95,9 @@ def objective(trial):
     # LR_START_EPOCH = trial.suggest_categorical('LR_START_EPOCH', [25, 50])
     LR_START_EPOCH = config.LR_START_EPOCH
     
-    L1_LAMBDA = trial.suggest_categorical('L1_LAMBDA', [1.0, 10.0, 25.0, 50.0, 100.0])
+    L1_LAMBDA = trial.suggest_categorical('L1_LAMBDA', [1.0, 10.0, 25.0, 50.0])
     RECON_LAMBDA = 1.0
-    BCE_LAMBDA = trial.suggest_categorical('BCE_LAMBDA', [1.0, 10.0, 25.0, 50.0])
+    BCE_LAMBDA = trial.suggest_categorical('BCE_LAMBDA', [0.1, 1.0, 10.0, 25.0, 50.0])
     
     scheduler_gen = optim.lr_scheduler.LambdaLR(opt_gen, lr_lambda=lambda epoch: lambda_lr(epoch, LR_START_EPOCH, config.NUM_EPOCHS))
     scheduler_disc = optim.lr_scheduler.LambdaLR(opt_disc, lr_lambda=lambda epoch: lambda_lr(epoch, LR_START_EPOCH, config.NUM_EPOCHS))
@@ -139,10 +139,11 @@ def objective(trial):
             opt_gen.zero_grad()
             pred_disc_fake = disc(target_fake)
             loss_G_BCE = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
-            loss_G_L1 = criterion_L1(target_fake, target_C) * L1_LAMBDA
+            loss_G_L1 = criterion_L1(target_fake, target_C)
             loss_G_reconA = criterion_L1(image_A_recon, image_A)
             loss_G_reconB = criterion_L1(image_B_recon, image_B)
-            loss_G = BCE_LAMBDA * loss_G_BCE + loss_G_L1 + RECON_LAMBDA * loss_G_reconA + RECON_LAMBDA * loss_G_reconB
+            loss_G = BCE_LAMBDA * loss_G_BCE + L1_LAMBDA * loss_G_L1 + RECON_LAMBDA * loss_G_reconA + RECON_LAMBDA * loss_G_reconB
+            loss_G_raw = loss_G_BCE + loss_G_L1 + loss_G_reconA + loss_G_reconB
             loss_G.backward()
             opt_gen.step()
 
@@ -153,7 +154,7 @@ def objective(trial):
         scheduler_gen.step()
         
         # Log the generator loss to Optuna
-        trial.report(loss_G.item(), epoch)
+        trial.report(loss_G_raw.item(), epoch)
 
         # Handle pruning (optional)
         if trial.should_prune():

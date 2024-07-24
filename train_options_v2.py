@@ -22,18 +22,23 @@ class TrainOptions:
         self.parser.add_argument('--num_epochs', type=int, default=200)
         self.parser.add_argument('--num_layers', type=int, default=4)
         self.parser.add_argument('--num_features', type=int, default=32)
+        self.parser.add_argument('--num_seg_features', type=int, default=16)
         
         self.parser.add_argument('--condition_method', type=str, default="add")
-        self.parser.add_argument('--gan_version', type=int, default=3)
-        self.parser.add_argument('--dataset_version', type=int, default=3)
+        self.parser.add_argument('--gan_version', type=int, default=2)
+        self.parser.add_argument('--dataset_version', type=int, default=4)
         
         self.parser.add_argument('--learning_rate', '--lr', type=float, default=2e-4)
         self.parser.add_argument('--lr_start_epoch', type=int, default=50)
         self.parser.add_argument('--lr_decay', type=float, default=0.95)
+        
         self.parser.add_argument('--lambda_gan_l1', type=float, default=1.0)
-        self.parser.add_argument('--lambda_bce', type=float, default=0.1)
+        self.parser.add_argument('--lambda_gan_bce', type=float, default=25.0)
         self.parser.add_argument('--lambda_recon', type=float, default=1.0)
-        self.parser.add_argument('--lambda_gdl', type=float, default=1.0)
+        self.parser.add_argument('--lambda_gdl', type=float, default=2.0)
+        self.parser.add_argument('--lambda_seg_bce', type=float, default=5.0)
+        self.parser.add_argument('--lambda_seg_dice', type=float, default=5.0)
+        
         self.parser.add_argument('--b1', type=float, default=0.5)
         self.parser.add_argument('--b2', type=float, default=0.999)
         self.parser.add_argument('--dropout', type=float, default=0.5)

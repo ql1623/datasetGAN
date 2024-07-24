@@ -15,12 +15,79 @@ import torch.autograd as autograd
 
 from collections import OrderedDict
 
+import matplotlib.pyplot as plt
 from utils.config_reader import Config
 # from train_options import Options
 # import train_options as config
 from utils.utils import *
 
 from train_options_v2 import TrainOptions
+
+"""First Attempth, Having Segmentation Network inside GAN"""
+
+
+def save_probability_map(seg_target_fake, checkpoint_dir, dir_name, filename="probability_map.npy"):
+    # Apply sigmoid to get probabilities
+    prob_map = torch.sigmoid(seg_target_fake).detach().cpu().numpy()
+
+    # Assuming batch size is 1 for simplicity
+    # prob_map = prob_map[0, 0, :, :]  # Get the first sample in the batch and squeeze out the channel dimension
+
+    # Save the probability map as a .npy file
+    save_path = os.path.join(checkpoint_dir, "chkpt_" + dir_name, filename)
+    np.save(save_path, prob_map)
+    print(f"Probability map saved to {save_path}")
+
+
+def plot_probability_map(seg_target_fake):
+    # Apply sigmoid to get probabilities
+    prob_map = torch.sigmoid(seg_target_fake).detach().cpu().numpy()
+
+    # Assuming batch size is 1 for simplicity
+    prob_map = prob_map[0, 0, :, :]  # Get the first sample in the batch and squeeze out the channel dimension
+
+    # Plot the probability map
+    plt.imshow(prob_map, cmap='gray')
+    plt.colorbar()
+    plt.title('Probability Map')
+    plt.show()
+
+def patches_to_images2(pred_patches, image_ori_shape, num_patches):
+    h, w = image_ori_shape # [160, 200]
+    num_patches_h, num_patches_w = num_patches # [2,2]
+    batch_with_patch_size, _, patch_size_h, patch_size_w = pred_patches.shape
+    batch_size = batch_with_patch_size // (num_patches_h * num_patches_w) # floor (//) or int(), as division (/) gets float 
+    stride_h = (h-patch_size_h) // (num_patches_h - 1)
+    stride_w = (w-patch_size_w) // (num_patches_w - 1)
+    
+    batch_pred_patches = torch.reshape(pred_patches, (batch_size, 4, pred_patches.shape[2], pred_patches.shape[3])) # [batch_size, 4, 128, 128]
+    # batch_real_patches = torch.reshape(real_patches, (batch_size, 4, real_patches.shape[2], real_patches.shape[3]))
+
+    # Iterate over every possible position of the kernel
+    recon_pred_images = torch.zeros((batch_size, h, w), dtype=pred_patches.dtype)
+    # recon_real_images = torch.zeros((batch_size, h, w), dtype=real_patches.dtype)
+    overlap_count = torch.zeros((batch_size, h, w), dtype=torch.float32)
+    
+    for batch_index in range(batch_size):
+        patch_idx = 0
+        for i in range(0, h - patch_size_h + 1, stride_h):
+            for j in range(0, w - patch_size_w + 1, stride_w):
+                recon_pred_images[batch_index, i:i + patch_size_h, j:j + patch_size_w] += batch_pred_patches[batch_index, patch_idx].cpu()
+                # recon_real_images[batch_index, i:i + patch_size_h, j:j + patch_size_w] += batch_real_patches[batch_index, patch_idx].cpu()
+                overlap_count[batch_index, i:i + patch_size_h, j:j + patch_size_w] += 1
+                patch_idx += 1
+    
+    pred_images = recon_pred_images / overlap_count
+    # real_images = recon_real_images / overlap_count
+    
+    for batch_index in range(batch_size):
+        pred_images[batch_index, :, :] = normalize_image(pred_images[batch_index])
+        # real_images[batch_index, :, :] = normalize_image(real_images[batch_index])
+        
+    pred_images = torch.unsqueeze(pred_images, 1)
+    # real_images = torch.unsqueeze(real_images, 1)
+        
+    return pred_images #, real_images
 
 if __name__ == "__main__":
     # config = Config("./utils/params.yaml")
@@ -41,7 +108,7 @@ if __name__ == "__main__":
         if options.CONDITION_METHOD == "concat":
             import model.cgan.generator_unet4_cgan as models
         elif options.CONDITION_METHOD == "add": # not concat but add
-            import model.cgan.generator_unet4_cgan_v2 as models  
+            import model.cgan.generator_unet4_cgan_v2_seg as models  
         else:  
             raise Exception("Condition method in GAN is not one of the predefined options")
     else:
@@ -74,6 +141,7 @@ if __name__ == "__main__":
     criterion_GAN = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
     criterion_GDL = GradientDifferenceLoss()
+    criterion_SEG = nn.BCEWithLogitsLoss()
     
     dataset_version = options.DATASET_VERSION
     if dataset_version == 1:
@@ -85,8 +153,11 @@ if __name__ == "__main__":
     elif dataset_version == 3:
         from dataset_png_v3 import MRI_dataset  
         train_dataset = MRI_dataset(options.INPUT_MODALITIES, options.DATA_PNG_DIR, transform=True, train=True)
-        
-    train_loader = DataLoader(train_dataset, batch_size=options.BATCH_SIZE, shuffle=True, num_workers=options.NUM_WORKERS)
+    elif dataset_version == 4:
+        from dataset_png_v3_seg import MRI_dataset  
+        train_dataset = MRI_dataset(options.INPUT_MODALITIES, options.DATA_PNG_DIR, transform=True, train=True) 
+    # train_loader = DataLoader(train_dataset, batch_size=options.BATCH_SIZE, shuffle=True, num_workers=options.NUM_WORKERS)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=options.NUM_WORKERS)
     
     run_id = datetime.datetime.now().strftime("run_%H:%M:%S_%d/%m/%Y")
     parser.save_options(run_id, options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, train=True)
@@ -115,11 +186,24 @@ if __name__ == "__main__":
                 in_out_comb = in_out_comb.to(options.DEVICE)
                 target_labels = in_out_to_ohe_label(in_out_comb, 3)
                 
-            image_A, image_B, real_target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
+            elif dataset_version == 4:           
+                image_A, image_B, real_target_C, real_seg, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4], images_labels[5]
+                # import pdb; pdb.set_trace()
+                image_A, image_B, real_target_C, real_seg, in_out_comb = reshape_data_seg(image_A, image_B, real_target_C, real_seg, in_out_comb)
+                in_out_comb = in_out_comb.to(options.DEVICE)
+                target_labels = in_out_to_ohe_label(in_out_comb, 3)
+                
+            image_A, image_B, real_target_C, real_seg, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), real_seg.to(options.DEVICE), target_labels.to(options.DEVICE)
             
             x_concat = torch.cat((image_A, image_B), dim=1)
-            target_fake, image_A_recon, image_B_recon = gen(x_concat, target_labels)
+            target_fake, image_A_recon, image_B_recon, seg_target_fake = gen(x_concat, target_labels)
             
+            seg_target_fake_whole = patches_to_images2(seg_target_fake, [200,200], [2,2])
+        
+            seg_target_fake_whole = seg_target_fake_whole.to('cpu')  # Move to CPU if it's on GPU
+            # plot_probability_map(seg_target_fake)
+            save_probability_map(seg_target_fake_whole, options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, filename="probability_map.npy")
+            reveresed_confidence_map = 1 - seg_target_fake
             
             # backward of disc
             # -- Disc loss for fake --
@@ -155,11 +239,14 @@ if __name__ == "__main__":
             
             # loss for gradient difference between pred and real
             loss_G_GDL = criterion_GDL(target_fake, real_target_C)
+            
+            # loss for segmentation
+            loss_G_seg = criterion_SEG(seg_target_fake, real_seg)
             # options.LAMBDA_BCE = 10
             # options.LAMBDA_RECON = 1
             
             # loss_G = 20*loss_G_BCE + 100*loss_G_L1 + 20*loss_G_reconA + 20*loss_G_reconB 
-            loss_G = options.LAMBDA_BCE*loss_G_BCE + loss_G_L1 + options.LAMBDA_RECON*loss_G_reconA + options.LAMBDA_RECON*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL
+            loss_G = options.LAMBDA_BCE*loss_G_BCE + loss_G_L1 + options.LAMBDA_RECON*loss_G_reconA + options.LAMBDA_RECON*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL + options.LAMBDA_SEG*loss_G_seg
             loss_G.backward()
             opt_gen.step()
 
@@ -177,14 +264,15 @@ if __name__ == "__main__":
                 "D_fake": loss_D_fake.item(),
             }
             epoch_losses.append(batch_loss_dict)
-        
+            break
         scheduler_disc.step()
         scheduler_gen.step()
          
         log_loss_to_json(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, epoch_losses)
+        # log_loss_to_txt(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real)
         log_loss_to_txt(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, 
-                        loss_data=[loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real],
-                        loss_name=["G_BCE", "G_L1", "G_reA", "G_reB", "G_GDL", "D_fake", "D_real", "S_fake"])
+                        loss_data=[loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real, loss_G_seg], 
+                        loss_name=["G_BCE", "G_L1", "G_reA", "G_reB", "G_GDL", "G_SEG", "D_fake", "D_real"])
            
         if options.SAVE_MODEL:
             if (epoch+1) > 5 and (epoch+1) % options.CHECKPOINT_INTERVAL == 0:

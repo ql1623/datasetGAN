@@ -62,8 +62,8 @@ if __name__ == "__main__":
     opt_disc = optim.Adam(disc.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2)) 
     
     epoch_to_load = options.LOAD_EPOCH
-    gen, opt_gen = load_checkpoint(gen, opt_gen, options.LEARNING_RATE, options.SAVE_CHECKPOINT_DIR, options.LOAD_RESULTS_DIR_NAME, epoch_to_load, gen=True)
-    disc, opt_disc = load_checkpoint(disc, opt_disc, options.LEARNING_RATE, options.SAVE_CHECKPOINT_DIR, options.LOAD_RESULTS_DIR_NAME, epoch_to_load, gen=False)
+    gen, opt_gen = load_checkpoint(gen, opt_gen, options.LEARNING_RATE, options.SAVE_CHECKPOINT_DIR, options.LOAD_RESULTS_DIR_NAME, epoch_to_load, model_type="gen")
+    disc, opt_disc = load_checkpoint(disc, opt_disc, options.LEARNING_RATE, options.SAVE_CHECKPOINT_DIR, options.LOAD_RESULTS_DIR_NAME, epoch_to_load, model_type="disc")
     
     dataset_version = options.DATASET_VERSION
     if dataset_version == 1:
@@ -74,6 +74,9 @@ if __name__ == "__main__":
         test_dataset = MRI_dataset(config, transform=True, train=False)
     elif dataset_version == 3:
         from dataset_png_v3 import MRI_dataset  
+        test_dataset = MRI_dataset(options.INPUT_MODALITIES, options.DATA_PNG_DIR, transform=True, train=False)
+    elif dataset_version == 4:
+        from dataset_png_v3_seg import MRI_dataset 
         test_dataset = MRI_dataset(options.INPUT_MODALITIES, options.DATA_PNG_DIR, transform=True, train=False)
         
     test_loader = DataLoader(test_dataset, batch_size=options.BATCH_SIZE, shuffle=False, num_workers=options.NUM_WORKERS)
@@ -87,19 +90,30 @@ if __name__ == "__main__":
             images = images_labels[0:3]
             img_id = images_labels[3]
             image_A, image_B, real_target_C, target_labels = get_data_for_input_mod(images, options.INPUT_MODALITIES)
+            image_A, image_B, real_target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
             
         elif dataset_version == 2:           
             image_A, image_B, real_target_C, target_labels, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
             image_A, image_B, real_target_C, target_labels = reshape_data(image_A, image_B, real_target_C, target_labels)
+            image_A, image_B, real_target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
             
         elif dataset_version == 3:           
-                image_A, image_B, real_target_C, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
-                # import pdb; pdb.set_trace()
-                image_A, image_B, real_target_C, in_out_comb = reshape_data(image_A, image_B, real_target_C, in_out_comb)
-                in_out_comb = in_out_comb.to(options.DEVICE)
-                target_labels = in_out_to_ohe_label(in_out_comb, 3)
-        image_A, image_B, real_target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
+            image_A, image_B, real_target_C, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
+            # import pdb; pdb.set_trace()
+            image_A, image_B, real_target_C, in_out_comb = reshape_data(image_A, image_B, real_target_C, in_out_comb)
+            in_out_comb = in_out_comb.to(options.DEVICE)
+            target_labels = in_out_to_ohe_label(in_out_comb, 3)
+            image_A, image_B, real_target_C, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), target_labels.to(options.DEVICE)
                 
+                
+        elif dataset_version == 4:           
+            image_A, image_B, real_target_C, real_seg, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4], images_labels[5]
+            # import pdb; pdb.set_trace()
+            image_A, image_B, real_target_C, real_seg, in_out_comb = reshape_data_seg(image_A, image_B, real_target_C, real_seg, in_out_comb)
+            in_out_comb = in_out_comb.to(options.DEVICE)
+            target_labels = in_out_to_ohe_label(in_out_comb, 3)
+            image_A, image_B, real_target_C, real_seg, target_labels = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), real_seg.to(options.DEVICE), target_labels.to(options.DEVICE)
+        
         x_concat = torch.cat((image_A, image_B), dim=1)
         
         with torch.no_grad():
@@ -109,14 +123,14 @@ if __name__ == "__main__":
             real_images_A, real_images_B = patches_to_images(image_A, image_B, [200,200], [2,2])
             
             # import pdb; pdb.set_trace()
-            avg_ssim, avg_psnr, avg_mse = evaluate_images(pred_images_C, real_images_C, run_id, index, options.SAVE_RESULTS_DIR, options.LOAD_RESULTS_DIR_NAME) 
+            avg_ssim, avg_psnr, avg_mse, error_metrics = evaluate_images(pred_images_C, real_images_C, run_id, index, options.SAVE_RESULTS_DIR, options.LOAD_RESULTS_DIR_NAME) 
             
             print("[" + f"Batch {index+1}: MSE: {avg_mse:.6f} | SSIM: {avg_ssim:.6f} | PSNR: {avg_psnr:.6f}" + "]")
         
         # elif dataset_version == 2: 
         # save_results(img_id, target_labels, real_images_A, real_images_B, pred_images_C, real_images_C, options.SAVE_RESULTS_DIR, options.LOAD_RESULTS_DIR_NAME)
-        # elif dataset_version == 3: 
-        save_results(img_id, in_out_comb, options.INPUT_MODALITIES, real_images_A, real_images_B, pred_images_C, real_images_C, options.SAVE_RESULTS_DIR, options.LOAD_RESULTS_DIR_NAME)
+        # elif dataset_version == 3:  
+        save_results(run_id, img_id, in_out_comb, options.INPUT_MODALITIES, index, real_images_A, real_images_B, pred_images_C, real_images_C, error_metrics, options.SAVE_RESULTS_DIR, options.LOAD_RESULTS_DIR_NAME)
         # print("results was saved")
         
     generate_html(run_id, options.SAVE_RESULTS_DIR, options.LOAD_RESULTS_DIR_NAME)

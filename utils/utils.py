@@ -7,6 +7,7 @@ import cv2
 from PIL import Image
 import os
 import json
+from collections import OrderedDict
 
 import random
 import itertools
@@ -16,6 +17,56 @@ from itertools import permutations
 from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import mean_squared_error as mse
+
+
+"""Train Utils used in training only"""
+
+class GradientDifferenceLoss(nn.Module):
+    def __init__(self):
+        super(GradientDifferenceLoss, self).__init__()
+        
+        self.sobel_h = torch.tensor([[-1, 0, 1],[-2, 0, 2],[-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0) # make [1,1,3,3]
+        self.sobel_w = torch.tensor([[-1, -2, -1],[0, 0, 0],[1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        
+    def forward(self, pred, target):
+        self.sobel_h = self.sobel_h.to(target.device)
+        self.sobel_w = self.sobel_w.to(target.device)
+        
+        pred_grad_h = F.conv2d(pred, self.sobel_h, padding=1)
+        pred_grad_w = F.conv2d(pred, self.sobel_w, padding=1)
+        
+        target_grad_h = F.conv2d(target, self.sobel_h, padding=1)
+        target_grad_w = F.conv2d(target, self.sobel_w, padding=1)
+        
+        grad_diff_h = torch.mean((target_grad_h - pred_grad_h)**2)
+        grad_diff_w = torch.mean((target_grad_w - pred_grad_w)**2)
+        
+        return grad_diff_h + grad_diff_w
+
+class L1LossWithAttention(nn.Module):
+    def __init__(self):
+        super(L1LossWithAttention, self).__init__()
+        self.loss_fn = nn.L1Loss(reduction='none')
+
+    def forward(self, pred, target, seg_output):
+        # attention_map = torch.sigmoid(seg_output)
+        # l1_loss = self.loss_fn(pred, target)
+        weighted_l1_loss = seg_output * self.loss_fn(pred, target)
+        return weighted_l1_loss.mean()
+
+
+class DiceLoss(nn.Module):
+    def __init__(self, epsilon=1e-6):
+        super (DiceLoss, self).__init__()
+        self.epsilon = epsilon
+        
+    def forward(self, image_fake, image_real):
+        # image_fake and image_real should be squeezed = [B, C=1, H, W] --> [B, H, W]
+        intersection = (image_fake * image_real).sum(dim=(-1,-2))
+        union = (image_fake).sum(dim=(-1,-2)) + (image_real).sum(dim=(-1,-2))
+        union = torch.where(union == 0, intersection, union)
+        dice_coeff = (2 * intersection) + self.epsilon / union + self.epsilon
+        return 1 - dice_coeff.mean()
 
 # def mkdirs(paths):
 #     """create empty directories if they don't exist
@@ -123,19 +174,28 @@ def save_options(options, run_id, file_dir, dir_name, train=True):
 
 
              
-def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real):
+def log_loss_to_txt(log_dir, dir_name, run_id, epoch, loss_data, loss_name):
+    # losses now: loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real, loss_S
     save_path = os.path.join(log_dir, "chkpt_" + dir_name)
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-        
+    
+    # num_loss = len(loss_data)
+    # loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real, loss_S = loss_data   
+    # "G_BCE", "G_L1", "G_reA", "G_reB", "G_GDL", "D_fake", "D_real", "S_fake" = loss_name
     log_file_path = os.path.join(save_path, "loss_log.txt")
     
     with open(log_file_path, 'a') as file:
         if epoch == 1:
             # Write header if the it is start of training
             file.write(f"================ Training Loss {run_id} ================\n")
-            file.write(f"epoch:\tG_BCE\t\tG_L1\t\tG_reA\t\tG_reB\t\tD_fake\t\tD_real\n")
-        file.write(f"{epoch}\t\t{loss_G_BCE:.6f}\t{loss_G_L1:.6f}\t{loss_G_reconA:.6f}\t{loss_G_reconB:.6f}\t{loss_G_GDL:.6f}\t{loss_D_fake:.6f}\t{loss_D_real:.6f}\n")
+            header = "epoch:\t" + loss_name[0] + "\t\t" + "\t\t".join(loss_name[1:]) + "\n"
+            file.write(header)
+            # file.write(f"epoch:\tG_BCE\t\tG_L1\t\tG_reA\t\tG_reB\t\tG_GDL\t\tD_fake\t\tD_real\n")
+        # file.write(f"{epoch}\t\t{loss_G_BCE:.6f}\t{loss_G_L1:.6f}\t{loss_G_reconA:.6f}\t{loss_G_reconB:.6f}\t{loss_G_GDL:.6f}\t{loss_D_fake:.6f}\t{loss_D_real:.6f}\n")
+        loss_values = [f"{loss:.6f}" for loss in loss_data]
+        line = f"{epoch}" + "\t\t" + "\t".join(loss_values) + "\n"
+        file.write(line)
         file.flush() 
 
 def log_loss_to_json(log_dir, dir_name, run_id, epoch, losses):
@@ -176,15 +236,19 @@ def save_checkpoint(model, optimizer, checkpoint_dir, dir_name, save_filename):
     }    
     torch.save(checkpoint, save_path)
 
-def load_checkpoint(model, optimizer, lr, checkpoint_dir, dir_name, epoch_num, gen=True):
+def load_checkpoint(model, optimizer, lr, checkpoint_dir, dir_name, epoch_num, model_type="gen"):
     save_dir = os.path.join(checkpoint_dir, "chkpt_" + dir_name)
-    if gen == True:
+    if model_type=="gen":
         save_path = os.path.join(save_dir, f"{epoch_num}_net_G.pth")
         print("Loaded gen from: ", save_path)
-    else:
+    elif model_type=="disc":
         save_path = os.path.join(save_dir, f"{epoch_num}_net_D.pth")
         print("Loaded disc from: ", save_path)
-    
+    elif model_type=="seg":
+        save_path = os.path.join(save_dir, f"{epoch_num}_net_S.pth")
+        print("Loaded seg from: ", save_path)
+    else:
+        raise Exception("model_type defined in wrong format")
     if not os.path.exists(save_path):
         print("No such checkpoint is in this directory")
          
@@ -214,7 +278,9 @@ def get_patches(image, patch_size, num_patches):
     
 # def reconstruct_2d_image(patches, np_data_shape, stride):
 #     h, w = np_data_shape
-    
+
+"""Test Utils used in testing only"""
+
 def normalize_image(image):
     """Normalize the image to the range [-1, 1]."""
     min_val = image.min()
@@ -286,10 +352,28 @@ def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir,
         if dir_name:
             eval_log_path = os.path.join(eval_log_dir, dir_name + "_test")
         else:
-            eval_log_path = eval_log_dir
+            eval_log_path = os.path.join(eval_log_dir, "unnamed_test")
+            print("results folder name not defined, saved test results in: ", eval_log_path)
         if not os.path.exists(eval_log_path):
             os.makedirs(eval_log_path)
 
+        # saving json file
+        metrics_json_path = os.path.join(eval_log_path, "test_results.json")
+        if os.path.exists(metrics_json_path):
+            with open(metrics_json_path, "r") as file:
+                test_logs = json.load(file)
+        else:
+            # test_logs = OrderedDict()
+            test_logs = {}
+        if run_id not in test_logs:
+            test_logs[run_id] = []
+        
+        test_logs[run_id].append({"SSIM": avg_ssim, "PSNR": avg_psnr, "MSE": avg_mse})
+        
+        with open(metrics_json_path, 'w') as file:
+            json.dump(test_logs, file, indent=4)
+        
+        # saving txt file
         eval_log_file = os.path.join(eval_log_path, "test_results.txt")
         
         with open(eval_log_file, 'a') as log_file:
@@ -297,7 +381,7 @@ def evaluate_images(pred_images, real_images, run_id, batch_index, eval_log_dir,
                 log_file.write(f"================ Testing Model {run_id} ================\n")
             log_file.write("[" + f"Batch {batch_index+1}: MSE: {avg_mse:.6f} | SSIM: {avg_ssim:.6f} | PSNR: {avg_psnr:.6f}" + "]\n")
 
-    return avg_ssim, avg_psnr, avg_mse
+    return avg_ssim, avg_psnr, avg_mse, error_metrics
 
 
 # def save_results(image_A, image_B, pred_images, real_images):
@@ -341,11 +425,22 @@ def save_results_ori(img_id, image_A, image_B, pred_images, real_images, save_re
         save_image(real_images[index], os.path.join(save_path, f"{id_str}_real_C.png"))
         
             
-def save_results(img_id, in_out_comb, input_mod, image_A, image_B, pred_images, real_images, save_results_dir, dir_name):
+def save_results(run_id, img_id, in_out_comb, input_mod, batch_index, image_A, image_B, pred_images, real_images, error_metrics, save_results_dir, dir_name):
     """Save images to a specified folder."""
     save_path = os.path.join(save_results_dir, dir_name + "_test", "images")
     if not os.path.exists(save_path):
         os.makedirs(save_path, exist_ok=True)
+    
+    detailed_metrics_json_path = os.path.join(save_results_dir, dir_name + "_test", "test_results_detailed.json")
+    if os.path.exists(detailed_metrics_json_path):
+        with open(detailed_metrics_json_path, "r") as file:
+            detailed_test_logs = json.load(file)
+    else:
+        detailed_test_logs = {}
+    if run_id not in detailed_test_logs:
+        detailed_test_logs[run_id] = []
+              
+    batch_detailed_results = []
     
     modalities = input_mod.split("_")
     modalities_map = {
@@ -364,8 +459,113 @@ def save_results(img_id, in_out_comb, input_mod, image_A, image_B, pred_images, 
         save_image(image_B[index], os.path.join(save_path, f"{id_str}_real_B_{mod_B}.png"))
         save_image(pred_images[index], os.path.join(save_path, f"{id_str}_fake_C_{mod_C}.png"))
         save_image(real_images[index], os.path.join(save_path, f"{id_str}_real_C_{mod_C}.png"))
+        
+        img_filename_and_comb = "_".join([id_str, mod_A, mod_B, "to", mod_C])
+        img_error_metrics = {
+            "SSIM": error_metrics["SSIM"][index],
+            "PSNR": error_metrics["PSNR"][index],
+            "MSE": error_metrics["MSE"][index],
+        }
+        
+        batch_detailed_results.append({"Img_details": img_filename_and_comb, "Error_metrics": img_error_metrics})
+        
+    batch_results = {
+        f"Batch_{batch_index}": batch_detailed_results
+    }    
+    detailed_test_logs[run_id].append(batch_results)
+
+    with open(detailed_metrics_json_path, 'w') as file:
+        json.dump(detailed_test_logs, file, indent=4)
+
+def save_results_seg(run_id, img_id, in_out_comb, input_mod, batch_index, 
+                     image_A, image_B, pred_images, real_images, pred_seg, real_seg, error_metrics, save_results_dir, dir_name):
+    """Save images to a specified folder."""
+    save_path = os.path.join(save_results_dir, dir_name + "_test", "images")
+    if not os.path.exists(save_path):
+        os.makedirs(save_path, exist_ok=True)
+    
+    detailed_metrics_json_path = os.path.join(save_results_dir, dir_name + "_test", "test_results_detailed.json")
+    if os.path.exists(detailed_metrics_json_path):
+        with open(detailed_metrics_json_path, "r") as file:
+            detailed_test_logs = json.load(file)
+    else:
+        detailed_test_logs = {}
+    if run_id not in detailed_test_logs:
+        detailed_test_logs[run_id] = []
+              
+    batch_detailed_results = []
+    
+    modalities = input_mod.split("_")
+    modalities_map = {
+        0: modalities[0],
+        1: modalities[1],
+        2: modalities[2],
+    }
+    batch_in_out = in_out_comb[::4].cpu().numpy()
+    # import pdb; pdb.set_trace()
+    # need to add to output what output modality is, maybe use config.INPUT_MODALITIES to save the other 2 
+    for index, img_filename in enumerate(img_id):
+        id_str = img_filename
+        mod_A, mod_B, mod_C = modalities_map[batch_in_out[index][0]], modalities_map[batch_in_out[index][1]], modalities_map[batch_in_out[index][2]]
+        
+        save_image(image_A[index], os.path.join(save_path, f"{id_str}_real_A_{mod_A}.png"))
+        save_image(image_B[index], os.path.join(save_path, f"{id_str}_real_B_{mod_B}.png"))
+        save_image(pred_images[index], os.path.join(save_path, f"{id_str}_fake_C_{mod_C}.png"))
+        save_image(real_images[index], os.path.join(save_path, f"{id_str}_real_C_{mod_C}.png"))
+        save_image(pred_seg[index], os.path.join(save_path, f"{id_str}_fake_seg_C_{mod_C}.png"))
+        save_image(real_seg[index], os.path.join(save_path, f"{id_str}_real_seg_C_{mod_C}.png"))
+        
+        img_filename_and_comb = "_".join([id_str, mod_A, mod_B, "to", mod_C])
+        img_error_metrics = {
+            "SSIM": error_metrics["SSIM"][index],
+            "PSNR": error_metrics["PSNR"][index],
+            "MSE": error_metrics["MSE"][index],
+        }
+        
+        batch_detailed_results.append({"Img_details": img_filename_and_comb, "Error_metrics": img_error_metrics})
+        
+    batch_results = {
+        f"Batch_{batch_index}": batch_detailed_results
+    }    
+    detailed_test_logs[run_id].append(batch_results)
+
+    with open(detailed_metrics_json_path, 'w') as file:
+        json.dump(detailed_test_logs, file, indent=4)
 
 
+def generate_html_seg(run_id, save_results_dir, dir_name):
+    """Generate an HTML file to view the images."""
+    save_images_path = os.path.join(save_results_dir, dir_name + "_test", "images")
+    save_html_path = os.path.join(save_results_dir, dir_name + "_test")
+    html_content = f"<html><body><h2>Testing Results {dir_name}</h2>"
+    pred_images = {}
+    
+    for filename in sorted(os.listdir(save_images_path)):
+        if filename.endswith(".png"):
+            img_id = "_".join(filename.split("_")[:-3])
+            # print(img_id)
+            if img_id not in pred_images:
+                pred_images[img_id] = []
+            pred_images[img_id].append(filename)
+    
+    # print(pred_images.keys())        
+    for img_id, files in pred_images.items():
+        html_content += f'<h3>{img_id}</h3>'
+        html_content += '<div style="display: flex;">'
+        img_sequence = ['real_A', 'real_B', 'fake_C', 'real_C', 'fake_seg_C', 'real_seg_C']
+        for file in files:
+            for type in img_sequence:
+                if type in file:
+                    html_content += f'<div style="text-align: center; margin: 10px;">'
+                    html_content += f'<img src="images/{file}" style="max-width: 200px; display: block;"><br><p>{file}</p>'
+                    html_content += '</div>'
+        html_content += '</div><br>'
+    
+    html_content += "</body></html>"
+    
+    with open(os.path.join(save_html_path, f"{run_id}.html"), "w") as f:
+        f.write(html_content)
+        
 def generate_html(run_id, save_results_dir, dir_name):
     """Generate an HTML file to view the images."""
     save_images_path = os.path.join(save_results_dir, dir_name + "_test", "images")
@@ -434,6 +634,7 @@ def generate_html_ori(run_id, save_results_dir, dir_name):
 
 
 
+"""Base Utils used in both train and test"""
 
 def get_data_for_task(images, modality_direction):
     # images from dataloader are in: [t1_slice, t1ce_slice, t2_slice, flair_slice], each with size [batch_size, 4, 128, 128]
@@ -676,41 +877,27 @@ def get_data_for_input_mod_h5(images, input_modalities):
     return images_A_batch, images_B_batch, images_C_batch, target_labels_batch, target_name_list
 
 def reshape_data(image_A, image_B, image_C, target_labels):
+    # [batch_size, patches, 128, 128] --> [batch_size*patches, 1, 128, 128]
     image_A = image_A.view(-1, 1, 128, 128)
     image_B = image_B.view(-1, 1, 128, 128)
     image_C = image_C.view(-1, 1, 128, 128)
     target_labels = target_labels.view(-1, 3)
     return image_A, image_B, image_C, target_labels
+
+def reshape_data_seg(image_A, image_B, image_C, image_seg, target_labels):
+    # [batch_size, patches, 128, 128] --> [batch_size*patches, 1, 128, 128]
+    image_A = image_A.view(-1, 1, 128, 128)
+    image_B = image_B.view(-1, 1, 128, 128)
+    image_C = image_C.view(-1, 1, 128, 128)
+    image_seg = image_seg.view(-1, 1, 128, 128)
+    target_labels = target_labels.view(-1, 3)
+    return image_A, image_B, image_C, image_seg, target_labels
     
 # def get_condition_label(modality_direction, num_classes):
 #     output_mod = modality_direction.split("_")[-1]
 #     out_mod_ohe_label = get_ohe_label(output_mod, num_classes)
     
 #     return out_mod_ohe_label
-
-
-class GradientDifferenceLoss(nn.Module):
-    def __init__(self):
-        super(GradientDifferenceLoss, self).__init__()
-        
-        self.sobel_h = torch.tensor([[-1, 0, 1],[-2, 0, 2],[-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0) # make [1,1,3,3]
-        self.sobel_w = torch.tensor([[-1, -2, -1],[0, 0, 0],[1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-        
-    def forward(self, pred, target):
-        self.sobel_h = self.sobel_h.to(target.device)
-        self.sobel_w = self.sobel_w.to(target.device)
-        
-        pred_grad_h = F.conv2d(pred, self.sobel_h, padding=1)
-        pred_grad_w = F.conv2d(pred, self.sobel_w, padding=1)
-        
-        target_grad_h = F.conv2d(target, self.sobel_h, padding=1)
-        target_grad_w = F.conv2d(target, self.sobel_w, padding=1)
-        
-        grad_diff_h = torch.mean((target_grad_h - pred_grad_h)**2)
-        grad_diff_w = torch.mean((target_grad_w - pred_grad_w)**2)
-        
-        return grad_diff_h + grad_diff_w
-
     
 if __name__ == "__main__":
     from datasetGAN import train_options as config

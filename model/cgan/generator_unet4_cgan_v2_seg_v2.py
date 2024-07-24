@@ -272,7 +272,7 @@ class ConditionalBlock_v2(nn.Module):
 # =========== define model architecture ============ #
 class datasetGAN(nn.Module):
     """ Defining Generator of the model """
-    def __init__(self, input_channels, output_channels, ngf, version): # input_channels = 1, output_channel = 1, ngf = 64/32 , features = [16,32,64,128]
+    def __init__(self, input_channels, output_channels, ngf, pre_out_channels, version): # input_channels = 1, output_channel = 1, ngf = 64/32 , features = [16,32,64,128]
         """Generator with UNET and Fusion Network 
 
         Parameters:
@@ -285,6 +285,7 @@ class datasetGAN(nn.Module):
         self.input_channels = input_channels
         self.features = ngf
         self.output_channels = output_channels
+        self.pre_output_channels = pre_out_channels
         self.version = version
         
         # -------- Modality Encoder - Modality 1 -------- 
@@ -410,43 +411,23 @@ class datasetGAN(nn.Module):
 
         # whether to add one more conv so input to seg is lower 
         # self.fusion_conv5 = ConvBlock(self.features, out_channels=16, act_fn="relu", norm="batch", use_dropout=False)
-
-        self.fusion_final_conv = nn.Sequential(
+        # -----------
+        self.fusion_final_conv1 = ConvBlock(self.features, self.pre_output_channels, act_fn="relu", norm="batch", use_dropout=False)
+        
+        self.fusion_final_conv2 = nn.Sequential(
             # nn.Conv2d(self.features, self.features/2, kernel_size=3, stride=1, padding=1),
             # nn.ReLU(inplace=True)
-            nn.Conv2d(self.features, self.input_channels, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(self.pre_output_channels, self.output_channels, kernel_size=3, stride=1, padding=1),
             nn.Tanh()
         )
-        
-        # segmentation network
-        # no initial conv as use feat before finalconv of fusion
-        self.seg_conv_1 = DoubleConvBlock(self.features, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
-        self.seg_down_1 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.seg_conv_2 = DoubleConvBlock(self.features*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
-        self.seg_down_2 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.seg_conv_3 = DoubleConvBlock(self.features*4, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
-        self.seg_down_3 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.seg_bottleneck = nn.Sequential(
-            nn.Conv2d(self.features*8, self.features*8*2, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(self.features*8*2),    
-            nn.LeakyReLU(0.2, inplace=True),
-        )
-        
-        self.seg_up_1 = nn.ConvTranspose2d(self.features*8*2, self.features*8, kernel_size=2, stride=2)
-        self.seg_upconv_1 = DoubleConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
-
-        self.seg_up_2 = nn.ConvTranspose2d(self.features*8, self.features*4, kernel_size=2, stride=2)
-        self.seg_upconv_2 = DoubleConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
-
-        self.seg_up_3 = nn.ConvTranspose2d(self.features*4, self.features*2, kernel_size=2, stride=2)
-        self.seg_upconv_3 = DoubleConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
-
-        self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=3, stride=1, padding=1)
-        # self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=1, stride=1, padding=1)
-        
+        #  --- or ---
+        # self.fusion_final_conv = nn.Sequential(
+        #     # nn.Conv2d(self.features, self.features/2, kernel_size=3, stride=1, padding=1),
+        #     # nn.ReLU(inplace=True)
+        #     nn.Conv2d(self.features, self.output_channels, kernel_size=3, stride=1, padding=1),
+        #     nn.Tanh()
+        # )
+                
     def forward(self, inputs, condition):
         # import pdb; pdb.set_trace()
         # inputs.shape = [128,2,128,128] = [batch_size*num_patches, num_modality, H, W]   
@@ -584,12 +565,59 @@ class datasetGAN(nn.Module):
         fusion_4 = self.fusion4(upconv4_x1, upconv4_x2)
         fusion_merge4 = self.fusion_conv4(torch.cat((fusion_4,fusion_upsamp3),dim=1))
         
-        out_fusion = self.fusion_final_conv(fusion_merge4)
+        pre_out_fusion = self.fusion_final_conv1(fusion_merge4)
+        out_fusion = self.fusion_final_conv2(pre_out_fusion)
+        # --- or ---
+        # out_fusion = self.fusion_final_conv(fusion_merge4)
         # out_fusion = self.fusion_final_conv(fusion_merge3)
         
+        return out_fusion, out_x1, out_x2, pre_out_fusion
+        # return out_fusion, out_x1, out_x2, fusion_merge4
+    
+# gradient tape?
+class SegmentationNetwork(nn.Module):
+    def __init__(self, input_ngf, output_channels):
+        super(SegmentationNetwork, self).__init__()
+        
+        # self.input_channels = input_channels
+        self.features = input_ngf
+        self.output_channels = output_channels
+        
+        # segmentation network
+        # no initial conv as use feat before finalconv of fusion
+        self.seg_conv_1 = DoubleConvBlock(self.features, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_down_1 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.seg_conv_2 = DoubleConvBlock(self.features*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_down_2 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.seg_conv_3 = DoubleConvBlock(self.features*4, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_down_3 = nn.MaxPool2d(kernel_size=2, stride=2)
+
+        self.seg_bottleneck = nn.Sequential(
+            nn.Conv2d(self.features*8, self.features*8*2, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.features*8*2),    
+            nn.LeakyReLU(0.2, inplace=True),
+        )
+        
+        self.seg_up_1 = nn.ConvTranspose2d(self.features*8*2, self.features*8, kernel_size=2, stride=2)
+        self.seg_upconv_1 = DoubleConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+
+        self.seg_up_2 = nn.ConvTranspose2d(self.features*8, self.features*4, kernel_size=2, stride=2)
+        self.seg_upconv_2 = DoubleConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+
+        self.seg_up_3 = nn.ConvTranspose2d(self.features*4, self.features*2, kernel_size=2, stride=2)
+        self.seg_upconv_3 = DoubleConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+
+        # self.seg_final_conv = nn.Conv2d(self.features*2, self.output_channels, kernel_size=3, stride=1, padding=1)
+        self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=1, stride=1, padding=0)
+        
+    
+    def forward(self, image_features):
+        # print(image_features.shape)
         # segmentation branch 
         seg_skip_connection = []
-        seg_conv_fu1 = self.seg_conv_1(fusion_merge4)
+        seg_conv_fu1 = self.seg_conv_1(image_features)
         seg_skip_connection.append(seg_conv_fu1)
         seg_down_fu1 = self.seg_down_1(seg_conv_fu1)
         
@@ -614,7 +642,7 @@ class datasetGAN(nn.Module):
         
         seg_output = torch.sigmoid(self.seg_final_conv(seg_upconv_fu3))
         
-        return out_fusion, out_x1, out_x2, seg_output
+        return seg_output
  
 
 
@@ -676,6 +704,11 @@ class Discriminator(nn.Module):
         return self.disc(x)    
 
 def test():
+    x_seg = torch.randn((4,32,128,128))
+    seg = SegmentationNetwork(32, 1)
+    seg_output = seg(x_seg)
+    print(seg_output.shape)
+    
     # x_gen = torch.randn((1,2,128,128))
     # x_disc = torch.randn((1,1,128,128))
     # disc = Discriminator(in_channels=1, features=[32,64,128,256,512])
@@ -688,12 +721,15 @@ def test():
     # print(pred_x2.shape)
     # print(preds_disc.shape)
 
-    model = datasetGAN(1,1,32, version=4)
-    summary(model, [(2, 128, 128),  (3, )]) 
+    # model = datasetGAN(1,1,32, version=4)
+    # model = datasetGAN(1,1,32, version=1)
+    # summary(model, [(2, 128, 128),  (3, )]) 
     
     # model = Discriminator(in_channels=1, features=[32,64,128,256,512])
     # summary(model, [(1, 128, 128),  (3, )]) 
     
+    # model = SegmentationNetwork(32, 1)
+    # summary(model, (32, 128, 128)) 
     
     
 
