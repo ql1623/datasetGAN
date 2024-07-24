@@ -186,7 +186,7 @@ def objective(trial):
 
         scheduler_disc.step()
         scheduler_gen.step()
-        scheduler_gen.step()
+        scheduler_seg.step()
         
         # Log the generator loss to Optuna
         trial.report(loss_G_raw.item(), epoch)

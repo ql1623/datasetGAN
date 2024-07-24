@@ -291,7 +291,7 @@ if __name__ == "__main__":
             
         scheduler_disc.step()
         scheduler_gen.step()
-        scheduler_gen.step()
+        scheduler_seg.step()
   
         log_loss_to_json(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, epoch_losses)
         log_loss_to_txt(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, 
