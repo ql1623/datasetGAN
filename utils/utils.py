@@ -18,30 +18,200 @@ from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import mean_squared_error as mse
 
+from scipy.signal import gaussian
 
 """Train Utils used in training only"""
 
 class GradientDifferenceLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, filter_type):
         super(GradientDifferenceLoss, self).__init__()
+        if filter_type == "sobel":
+            self.filter_h = torch.tensor([[-1, 0, 1],[-2, 0, 2],[-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0) # make [1,1,3,3]
+            self.filter_w = torch.tensor([[-1, -2, -1],[0, 0, 0],[1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        elif filter_type == "prewitt":  
+            self.filter_h = torch.tensor([[-1, 0, 1],[-1, 0, 1],[-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0) # make [1,1,3,3]
+            self.filter_w = torch.tensor([[-1, -1, -1],[0, 0, 0],[1, 1, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+        else:
+            raise ValueError(f"Unsupported filter type: {filter_type}")
         
-        self.sobel_h = torch.tensor([[-1, 0, 1],[-2, 0, 2],[-1, 0, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0) # make [1,1,3,3]
-        self.sobel_w = torch.tensor([[-1, -2, -1],[0, 0, 0],[1, 2, 1]], dtype=torch.float32).unsqueeze(0).unsqueeze(0)
-        
+        # Register filters as buffers to ensure they are moved with the model
+        # self.register_buffer('filter_h', filter_h)
+        # self.register_buffer('filter_w', filter_w)
+
     def forward(self, pred, target):
-        self.sobel_h = self.sobel_h.to(target.device)
-        self.sobel_w = self.sobel_w.to(target.device)
+        self.filter_h = self.filter_h.to(target.device)
+        self.filter_w = self.filter_w.to(target.device)
+
+        pred_grad_h = F.conv2d(pred, self.filter_h, padding=1)
+        pred_grad_w = F.conv2d(pred, self.filter_w, padding=1)
         
-        pred_grad_h = F.conv2d(pred, self.sobel_h, padding=1)
-        pred_grad_w = F.conv2d(pred, self.sobel_w, padding=1)
-        
-        target_grad_h = F.conv2d(target, self.sobel_h, padding=1)
-        target_grad_w = F.conv2d(target, self.sobel_w, padding=1)
+        target_grad_h = F.conv2d(target, self.filter_h, padding=1)
+        target_grad_w = F.conv2d(target, self.filter_w, padding=1)
         
         grad_diff_h = torch.mean((target_grad_h - pred_grad_h)**2)
         grad_diff_w = torch.mean((target_grad_w - pred_grad_w)**2)
         
         return grad_diff_h + grad_diff_w
+
+
+# https://github.com/DCurro/CannyEdgePytorch/blob/master/net_canny.py
+class CannyNet(nn.Module):
+    def __init__(self, threshold=10.0, use_cuda=False):
+        super(CannyNet, self).__init__()
+
+        self.threshold = threshold
+        self.use_cuda = use_cuda
+
+        filter_size = 5
+        generated_filters = gaussian(filter_size, std=1.0).reshape([1, filter_size])
+
+        self.gaussian_filter_horizontal = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=(1, filter_size), padding=(0, filter_size // 2))
+        self.gaussian_filter_horizontal.weight.data.copy_(torch.from_numpy(generated_filters))
+        self.gaussian_filter_horizontal.bias.data.copy_(torch.tensor([0.0], dtype=torch.float32))
+        self.gaussian_filter_vertical = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=(filter_size, 1), padding=(filter_size // 2, 0))
+        self.gaussian_filter_vertical.weight.data.copy_(torch.from_numpy(generated_filters.T))
+        self.gaussian_filter_vertical.bias.data.copy_(torch.tensor([0.0], dtype=torch.float32))
+
+        sobel_filter = torch.tensor([[1, 0, -1],
+                                     [2, 0, -2],
+                                     [1, 0, -1]], dtype=torch.float32)
+
+        self.sobel_filter_horizontal = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=sobel_filter.shape, padding=sobel_filter.shape[0] // 2)
+        self.sobel_filter_horizontal.weight.data.copy_(sobel_filter)
+        self.sobel_filter_horizontal.bias.data.copy_(torch.tensor([0.0], dtype=torch.float32))
+        self.sobel_filter_vertical = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=sobel_filter.shape, padding=sobel_filter.shape[0] // 2)
+        self.sobel_filter_vertical.weight.data.copy_(torch.transpose(sobel_filter, 0, 1))
+        self.sobel_filter_vertical.bias.data.copy_(torch.tensor([0.0], dtype=torch.float32))
+
+        filter_0 = np.array([[0, 0, 0], [0, 1, -1], [0, 0, 0]])
+        filter_45 = np.array([[0, 0, 0], [0, 1, 0], [0, 0, -1]])
+        filter_90 = np.array([[0, 0, 0], [0, 1, 0], [0, -1, 0]])
+        filter_135 = np.array([[0, 0, 0], [0, 1, 0], [-1, 0, 0]])
+        filter_180 = np.array([[0, 0, 0], [-1, 1, 0], [0, 0, 0]])
+        filter_225 = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, 0]])
+        filter_270 = np.array([[0, -1, 0], [0, 1, 0], [0, 0, 0]])
+        filter_315 = np.array([[0, 0, -1], [0, 1, 0], [0, 0, 0]])
+
+        all_filters = np.stack([filter_0, filter_45, filter_90, filter_135, filter_180, filter_225, filter_270, filter_315])
+
+        self.directional_filter = nn.Conv2d(in_channels=1, out_channels=8, kernel_size=filter_0.shape, padding=filter_0.shape[-1] // 2)
+        self.directional_filter.weight.data.copy_(torch.from_numpy(all_filters[:, None, ...]))
+        self.directional_filter.bias.data.copy_(torch.from_numpy(np.zeros(shape=(all_filters.shape[0],))))
+
+        hysteresis = np.ones((3, 3)) + 0.25
+        self.hysteresis = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=3, padding=1, bias=False)
+        with torch.no_grad():
+            self.hysteresis.weight[:] = torch.from_numpy(hysteresis)
+
+    def forward(self, img):
+        device = img.device
+        self.gaussian_filter_horizontal.to(device)
+        self.gaussian_filter_vertical.to(device)
+        self.sobel_filter_horizontal.to(device)
+        self.sobel_filter_vertical.to(device)
+        self.directional_filter.to(device)
+        
+        batch_size, _, height, width = img.size()
+
+        blur_horizontal = self.gaussian_filter_horizontal(img)
+        blurred_img = self.gaussian_filter_vertical(blur_horizontal)
+
+        grad_x_r = self.sobel_filter_horizontal(blurred_img)
+        grad_y_r = self.sobel_filter_vertical(blurred_img)
+
+        grad_mag = torch.sqrt(grad_x_r ** 2 + grad_y_r ** 2)
+        grad_mag = (grad_mag / grad_mag.view(batch_size, -1).max(dim=1)[0].view(batch_size, 1, 1, 1)) * 255.0
+        grad_orientation = (torch.atan2(grad_y_r, grad_x_r) * (180.0 / 3.14159)) + 180.0
+        grad_orientation = torch.round(grad_orientation / 45.0) * 45.0
+
+        all_filtered = self.directional_filter(grad_mag)
+
+        indices_positive = (grad_orientation / 45) % 8
+        indices_negative = ((grad_orientation / 45) + 4) % 8
+
+        indices_positive = indices_positive.long().view(batch_size, -1)
+        indices_negative = indices_negative.long().view(batch_size, -1)
+
+        all_filtered_flat = all_filtered.view(batch_size, 8, -1)
+        channel_select_filtered_positive = all_filtered_flat.gather(1, indices_positive.unsqueeze(1)).view(batch_size, 1, height, width)
+        channel_select_filtered_negative = all_filtered_flat.gather(1, indices_negative.unsqueeze(1)).view(batch_size, 1, height, width)
+
+        channel_select_filtered = torch.stack([channel_select_filtered_positive, channel_select_filtered_negative], dim=1)
+
+        is_max = channel_select_filtered.min(dim=1)[0] > 0.0
+        is_max = is_max.view(batch_size, 1, height, width)
+
+        thin_edges = grad_mag.clone()
+        thin_edges[is_max == 0] = 0.0
+
+        # thresholded = thin_edges.clone()
+        # thresholded[thin_edges < self.threshold] = 0.0
+
+        # early_threshold = grad_mag.clone()
+        # early_threshold[grad_mag < self.threshold] = 0.0
+
+        # if self.use_cuda:
+        #     thresholded = thresholded.cuda()
+        # weak = (thresholded == 0.5).float()
+        # weak_is_high = (self.hysteresis(thresholded) > 1).float() * weak
+        # thresholded = (thresholded >= 1).float() * 1 + weak_is_high * 1
+
+        return thin_edges
+
+    
+class GradientDifferenceLossCanny(nn.Module):
+    def __init__(self, canny_threshold=15.0, use_cuda=False):
+        super(GradientDifferenceLossCanny, self).__init__()
+        self.canny_threshold = canny_threshold
+        self.use_cuda = use_cuda
+        self.canny_net = CannyNet(threshold=self.canny_threshold, use_cuda=self.use_cuda)
+        
+    def forward(self, pred, target):
+        # Initialize lists to hold edge maps for each image in the batch
+        pred_edges = self.canny_net(pred)
+        target_edges = self.canny_net(target)
+        
+        grad_diff = torch.mean((target_edges - pred_edges) ** 2)
+        return grad_diff
+
+class GradientDifferenceLossCanny_v1(nn.Module):
+    def __init__(self, low_threshold=50, high_threshold=150):
+        super(GradientDifferenceLossCanny_v1, self).__init__()
+        self.low_threshold = low_threshold
+        self.high_threshold = high_threshold
+
+    def canny_edge_detection(self, img):
+        # Convert PyTorch tensor to numpy array
+        img_np = img.squeeze().cpu().numpy()
+
+        # Apply Canny edge detection
+        edges = cv2.Canny(img_np, self.low_threshold, self.high_threshold)
+
+        # Convert edges back to PyTorch tensor
+        edges_tensor = torch.tensor(edges, dtype=torch.float32).unsqueeze(0).to(img.device)
+        return edges_tensor
+
+    def forward(self, pred, target):
+        # Initialize lists to hold edge maps for each image in the batch
+        pred_edges_list = []
+        target_edges_list = []
+
+        # Loop through each image in the batch
+        for i in range(pred.size(0)):  # Batch size
+            for j in range(pred.size(1)):  # Number of channels
+                pred_edges = self.canny_edge_detection(pred[i, j, :, :].unsqueeze(0))
+                target_edges = self.canny_edge_detection(target[i, j, :, :].unsqueeze(0))
+                pred_edges_list.append(pred_edges)
+                target_edges_list.append(target_edges)
+
+        # Stack the lists to form tensors of shape [B, C, H, W]
+        pred_edges = torch.stack(pred_edges_list).view(pred.size())
+        target_edges = torch.stack(target_edges_list).view(target.size())
+
+        # Calculate the gradient difference loss
+        grad_diff = torch.mean((pred_edges - target_edges) ** 2)
+        return grad_diff
+
 
 class L1LossWithAttention(nn.Module):
     def __init__(self):
@@ -55,6 +225,17 @@ class L1LossWithAttention(nn.Module):
         return weighted_l1_loss.mean()
 
 
+class L2LossWithAttention(nn.Module):
+    def __init__(self):
+        super(L2LossWithAttention, self).__init__()
+        self.loss_fn = nn.MSELoss(reduction='none')
+
+    def forward(self, pred, target, seg_output):
+        # attention_map = torch.sigmoid(seg_output)
+        # l1_loss = self.loss_fn(pred, target)
+        weighted_l2_loss = seg_output * self.loss_fn(pred, target)
+        return weighted_l2_loss.mean()
+
 class DiceLoss(nn.Module):
     def __init__(self, epsilon=1e-6):
         super (DiceLoss, self).__init__()
@@ -65,7 +246,7 @@ class DiceLoss(nn.Module):
         intersection = (image_fake * image_real).sum(dim=(-1,-2))
         union = (image_fake).sum(dim=(-1,-2)) + (image_real).sum(dim=(-1,-2))
         union = torch.where(union == 0, intersection, union)
-        dice_coeff = (2 * intersection) + self.epsilon / union + self.epsilon
+        dice_coeff = (2 * intersection + self.epsilon) / (union + self.epsilon)
         return 1 - dice_coeff.mean()
 
 # def mkdirs(paths):
@@ -501,7 +682,7 @@ def save_results_seg(run_id, img_id, in_out_comb, input_mod, batch_index,
         1: modalities[1],
         2: modalities[2],
     }
-    batch_in_out = in_out_comb[::4].cpu().numpy()
+    batch_in_out = in_out_comb.cpu().numpy()
     # import pdb; pdb.set_trace()
     # need to add to output what output modality is, maybe use config.INPUT_MODALITIES to save the other 2 
     for index, img_filename in enumerate(img_id):
@@ -817,8 +998,8 @@ def get_ohe_label_vec(output_modality_num, num_classes):
 
 def in_out_to_ohe_label(in_out_combination, num_classes):
     # import pdb; pdb.set_trace()
-    output_modality_num = torch.tensor([comb[num_classes-1] for comb in in_out_combination])
-    return F.one_hot(output_modality_num, num_classes)
+    output_modality_num = torch.tensor([comb[num_classes-1] for comb in in_out_combination]) # get last element in in_out_combination
+    return F.one_hot(output_modality_num, num_classes) # ohe
 
 def get_data_for_input_mod_h5(images, input_modalities):
     # images from dataloader are in: [t1_slice, t1ce_slice, t2_slice, flair_slice], each with size [batch_size, 4, 128, 128]

@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 from torchsummary import summary
 
-
+"""Have Segmentation Network separately and not inside GAN, take feature layers right before out_conv of fusion"""
+"""2 final conv in fusion, final_conv1 and final_conv2, with params: pre_out_features"""
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, act_fn="leaky", norm="batch", use_dropout=False):
         """Convolution Block for a Double Convolution operation
@@ -374,19 +375,19 @@ class datasetGAN(nn.Module):
         
         # condition part
         if self.version == 1:
-            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=16, num_output_comb=3, is_linear=True)
             self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         elif self.version == 2:
-            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=16, num_output_comb=3, is_linear=True)
             self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         elif self.version == 3:
-            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=16, num_output_comb=3, is_linear=True)
             self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         elif self.version == 4:
-            self.cond_v2 = ConditionalBlock_v2(in_channels=1, out_channels=self.features*8, feat_img_size=8, is_separate=True)
+            self.cond_v2 = ConditionalBlock_v2(in_channels=1, out_channels=self.features*8, feat_img_size=16, is_separate=True)
             self.fusion0 = FusionBlock_with_cond(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", is_separate=True)
         elif self.version == 5:
-            self.cond_v2 = ConditionalBlock_v2(in_channels=3, out_channels=self.features*8, feat_img_size=8, is_separate=False)
+            self.cond_v2 = ConditionalBlock_v2(in_channels=3, out_channels=self.features*8, feat_img_size=16, is_separate=False)
             self.fusion0 = FusionBlock_with_cond(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", is_separate=False)
         else:
             raise Exception("version specified is wrong")
@@ -679,7 +680,7 @@ class Discriminator(nn.Module):
         """
         super(Discriminator, self).__init__()
 
-        self.cond = ConditionalBlock(3, out_channels=1, feat_img_size=128, num_output_comb=3, has_act_fn=False, is_linear=True)
+        self.cond = ConditionalBlock(3, out_channels=1, feat_img_size=256, num_output_comb=3, has_act_fn=False, is_linear=True)
         
         self.intitial_conv = nn.Sequential(
             nn.Conv2d(in_channels + 1, features[0], kernel_size=3, stride=2, padding=1),
