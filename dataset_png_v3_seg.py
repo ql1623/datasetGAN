@@ -11,7 +11,8 @@ import itertools
 import time
 
 from utils.utils import *
-import train_options as config
+
+from skimage import exposure as ex
 
 # change target labels to in_out_combination chosen instead of one hot from v2
 
@@ -57,7 +58,21 @@ class Norm_tanh:
     def __call__(self, image):
         # make seg mask binary
         return 
-        
+      
+def he(img):
+    img = np.array(img)
+    if(len(img.shape)==2):      #gray
+        outImg = ex.equalize_hist(img[:,:])*255 
+    elif(len(img.shape)==3):    #RGB
+        outImg = np.zeros((img.shape[0],img.shape[1],3))
+        for channel in range(img.shape[2]):
+            outImg[:, :, channel] = ex.equalize_hist(img[:, :, channel])*255
+
+    outImg[outImg>255] = 255
+    outImg[outImg<0] = 0
+    return outImg.astype(np.uint8)
+
+
 class MRI_dataset(Dataset):
     def __init__(self, input_modalities, data_png_dir, transform=True, train=True):
         # self.config = config
@@ -165,6 +180,14 @@ class MRI_dataset(Dataset):
         pil_B = Image.open(os.path.join(self.img_paths[img_B_ori_idx], self.img_lists["B"][idx]))
         pil_C = Image.open(os.path.join(self.img_paths[img_C_ori_idx], self.img_lists["C"][idx]))
         pil_seg = Image.open(os.path.join(self.seg_img_paths, self.seg_img_lists[idx]))
+        # pil_A_enhanced = he(pil_A)
+        # pil_B_enhanced = he(pil_B)
+        # pil_C_enhanced = he(pil_C)
+        # pil_seg_enhanced = he(pil_seg)
+        # tensor_A = self.transform(pil_A_enhanced)
+        # tensor_B = self.transform(pil_B_enhanced)
+        # tensor_C = self.transform(pil_C_enhanced)
+        # tensor_seg = self.seg_transform(pil_seg_enhanced)
         tensor_A = self.transform(pil_A)
         tensor_B = self.transform(pil_B)
         tensor_C = self.transform(pil_C)
@@ -188,6 +211,20 @@ class MRI_dataset(Dataset):
         return len(self.img_lists["A"])
 
 if __name__ == "__main__":
+    def save_image_tensor(image_tensor, save_dir, file_name):
+        """
+        Saves an image tensor as a PNG file in the specified directory.
+
+        Parameters:
+        image_tensor (torch.Tensor): The image tensor to save.
+        save_dir (str): The directory where the image will be saved.
+        file_name (str): The name of the file to save the image as.
+        """
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        save_path = os.path.join(save_dir, file_name)
+        save_image(image_tensor, save_path)
+
     print(config.BATCH_SIZE)
     print(config.INPUT_MODALITIES)
 
@@ -199,24 +236,40 @@ if __name__ == "__main__":
 
     for index, images_labels in enumerate(train_loader):
         image_A, image_B, target_C, image_seg, in_out_comb, img_id = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4], images_labels[5]
-        print(in_out_comb.shape)
-        print(len(img_id))
-        print(type(img_id))
-        print("---------")
-        
-        print(image_A[0].min())
-        print(image_A[0].max())
-        print("---------")
-        
+        print(image_A.shape)
+        print(image_B.shape)
+        print(target_C.shape)
         print(image_seg.shape)
-        print(type(image_seg))
-        print(image_seg[0].min())
-        print(image_seg[0].max())
-        print("---------")
-        
-        image_A, image_B, target_C, image_seg, in_out_comb = reshape_data_seg(image_A, image_B, target_C, image_seg, in_out_comb)
         print(in_out_comb.shape)
         break
+    #     save_dir = "/rds/general/user/ql1623/home/datasetGAN/pix_enhanced"
+    #     # Save images
+    #     for i in range(image_A.size(0)):
+    #         save_image_tensor(image_A[i], save_dir, f"{img_id[i]}_A.png")
+    #         save_image_tensor(image_B[i], save_dir, f"{img_id[i]}_B.png")
+    #         save_image_tensor(target_C[i], save_dir, f"{img_id[i]}_C.png")
+    #         save_image_tensor(image_seg[i], save_dir, f"{img_id[i]}_seg.png")
+    #     break   
+
+    # print(f"Images saved to {save_dir}")
+    print(f"Elapsed time: {time.time() - start_time} seconds")
+        # print(in_out_comb.shape)
+        # print(len(img_id))
+        # print(type(img_id))
+        # print("---------")
+        
+        # print(image_A[0].min())
+        # print(image_A[0].max())
+        # print("---------")
+        
+        # print(image_seg.shape)
+        # print(type(image_seg))
+        # print(image_seg[0].min())
+        # print(image_seg[0].max())
+        # print("---------")
+        
+        # image_A, image_B, target_C, image_seg, in_out_comb = reshape_data_seg(image_A, image_B, target_C, image_seg, in_out_comb)
+        # print(in_out_comb.shape)
     
     # c = 0
     # for i, id in enumerate(img_id):

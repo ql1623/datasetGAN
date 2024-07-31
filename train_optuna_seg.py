@@ -21,7 +21,7 @@ from utils.config_reader import Config
 # import train_options as config
 from utils.utils import *
 
-import model.cgan.generator_unet4_cgan_v2_seg_v2 as models 
+import model.cgan.generator_unet4_cgan_v2_seg_v3 as models 
 from dataset_png_v3_seg import MRI_dataset  
 
 from train_options_v2 import TrainOptions
@@ -69,17 +69,17 @@ def objective(trial):
     gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features, pre_out_channels=seg_num_features, version=gan_version)
     # summary(gen, (2, 128, 128))
     disc = models.Discriminator(in_channels=1, features=[32,64,128,256,512])
-    seg = models.SegmentationNetwork(input_ngf=seg_num_features, output_channels=1)
+    # seg = models.SegmentationNetwork(input_ngf=seg_num_features, output_channels=1)
     # seg = models.SegmentationNetwork(input_ngf=seg_num_features, output_channels=1)
     
     if torch.cuda.device_count() > 1:
         gen = nn.DataParallel(gen, options.GPU_IDS) # DistributedDataParallel?
         disc = nn.DataParallel(disc, options.GPU_IDS)
-        seg = nn.DataParallel(seg, options.GPU_IDS)
+        # seg = nn.DataParallel(seg, options.GPU_IDS)
     
     gen.to(options.DEVICE)
     disc.to(options.DEVICE)
-    seg.to(options.DEVICE)
+    # seg.to(options.DEVICE)
     
     # apply_init = trial.suggest_categorical("apply_init", [True, False])
     apply_init = False
@@ -95,7 +95,7 @@ def objective(trial):
     LR = options.LEARNING_RATE
     opt_disc = optim.Adam(disc.parameters(), lr=LR, betas=(B1, B2)) 
     opt_gen = optim.Adam(gen.parameters(), lr=LR, betas=(B1, B2))  
-    opt_seg = optim.Adam(seg.parameters(), lr=LR, betas=(B1, B2))  
+    # opt_seg = optim.Adam(seg.parameters(), lr=LR, betas=(B1, B2))  
     
     # --- define other hyperparams and lr scheduler ---
     # BATCH_SIZE = trial.suggest_categorical('BATCH_SIZE', [16, 32, 64])
@@ -112,7 +112,7 @@ def objective(trial):
     
     scheduler_gen = optim.lr_scheduler.LambdaLR(opt_gen, lr_lambda=lambda epoch: lambda_lr(epoch, LR_START_EPOCH, options.NUM_EPOCHS))
     scheduler_disc = optim.lr_scheduler.LambdaLR(opt_disc, lr_lambda=lambda epoch: lambda_lr(epoch, LR_START_EPOCH, options.NUM_EPOCHS))
-    scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, LR_START_EPOCH, options.NUM_EPOCHS))
+    # scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, LR_START_EPOCH, options.NUM_EPOCHS))
 
     criterion_GAN = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
@@ -144,9 +144,9 @@ def objective(trial):
             
             x_concat = torch.cat((image_A, image_B), dim=1)
             # generate
-            target_fake, image_A_recon, image_B_recon, fusion_features = gen(x_concat, target_labels)
+            target_fake, image_A_recon, image_B_recon, seg_target_fake = gen(x_concat, target_labels)
             # segment
-            seg_target_fake = seg(fusion_features)
+            # seg_target_fake = seg(fusion_features)
             
             # Discriminator backward pass
             set_require_grad(disc, True)
@@ -161,23 +161,25 @@ def objective(trial):
         
             # Segmentation backward pass
             set_require_grad(disc, False)
-            opt_seg.zero_grad()
-            loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
-            loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
-            loss_S = LAMBDA_SEG_BCE * loss_S_BCE + LAMBDA_SEG_DICE * loss_S_DICE
-            loss_S.backward(retain_graph=True)
-            opt_seg.step()           
+            # opt_seg.zero_grad()
+            # opt_seg.step()           
             
             # Generator backward pass
             opt_gen.zero_grad()
             pred_disc_fake = disc(target_fake, target_labels) # D(G(x))
             loss_G_BCE = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
-            loss_G_L1 = criterion_L1_GAN(target_fake, real_target_C, seg_target_fake.detach()) 
+            loss_G_L1 = criterion_L1_GAN(target_fake, real_target_C, seg_target_fake) 
             loss_G_reconA = criterion_L1(image_A_recon, image_A)
             loss_G_reconB = criterion_L1(image_B_recon, image_B)
             loss_G_GDL = criterion_GDL(target_fake, real_target_C)
-            loss_G = GAN_BCE_LAMBDA * loss_G_BCE + L1_LAMBDA * loss_G_L1 + RECON_LAMBDA * loss_G_reconA + RECON_LAMBDA * loss_G_reconB + LAMBDA_GDL*loss_G_GDL
-            loss_G_raw = loss_G_BCE + loss_G_L1 + loss_G_reconA + loss_G_reconB + loss_G_GDL
+            
+            loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
+            loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
+            loss_S = LAMBDA_SEG_BCE * loss_S_BCE + LAMBDA_SEG_DICE * loss_S_DICE
+            # loss_S.backward(retain_graph=True)
+            
+            loss_G = loss_S + GAN_BCE_LAMBDA * loss_G_BCE + L1_LAMBDA * loss_G_L1 + RECON_LAMBDA * loss_G_reconA + RECON_LAMBDA * loss_G_reconB + LAMBDA_GDL*loss_G_GDL
+            loss_G_raw = loss_S_BCE + loss_S_DICE + loss_G_BCE + loss_G_L1 + loss_G_reconA + loss_G_reconB + loss_G_GDL
             loss_G.backward()
             opt_gen.step()
 
@@ -186,7 +188,7 @@ def objective(trial):
 
         scheduler_disc.step()
         scheduler_gen.step()
-        scheduler_seg.step()
+        # scheduler_seg.step()
         
         # Log the generator loss to Optuna
         trial.report(loss_G_raw.item(), epoch)
@@ -198,23 +200,23 @@ def objective(trial):
     return loss_G_raw.item()
 
 def save_state(study, trial):
-    with open("optuna/sampler_seg_gpu.pkl", "wb") as sample_file:
+    with open("optuna/sampler_seg_v3_1_gpu.pkl", "wb") as sample_file:
         pickle.dump(study.sampler, sample_file)
-    with open("optuna/pruner_seg_gpu.pkl", "wb") as pruner_file:
+    with open("optuna/pruner_seg_v3_1_gpu.pkl", "wb") as pruner_file:
         pickle.dump(study.pruner, pruner_file)
         
 if __name__ == "__main__":
     # options = options("./utils/params.yaml")
     # options = Options.parse()
     # print(options.BATCH_SIZE)
-    storage_name = "sqlite:///optuna/optuna_study_seg_gpu.db"
-    study_name = "GAN_optimization_seg_gpu"
+    storage_name = "sqlite:///optuna/optuna_study_seg_v3_1_gpu.db"
+    study_name = "GAN_optimization_seg_v3_1_gpu"
     
-    if os.path.exists("optuna/sampler_seg_gpu.pkl") and os.path.exists("optuna/pruner_seg_gpu.pkl"):
-        with open("optuna/sampler_seg_gpu.pkl", "rb") as sample_file:
+    if os.path.exists("optuna/sampler_seg_v3_1_gpu.pkl") and os.path.exists("optuna/pruner_seg_v3_1_gpu.pkl"):
+        with open("optuna/sampler_seg_v3_1_gpu.pkl", "rb") as sample_file:
             restored_sampler = pickle.load(sample_file)
             print("previously saved SAMPLER was loaded")
-        with open("optuna/pruner_seg_gpu.pkl", "rb") as pruner_file:
+        with open("optuna/pruner_seg_v3_1_gpu.pkl", "rb") as pruner_file:
             restored_pruner = pickle.load(pruner_file)
             print("previously saved PRUNER was loaded")
             
@@ -228,7 +230,7 @@ if __name__ == "__main__":
     # set total optimization time limit to 70 hours just to be sure
     try:
         # study.optimize(objective, n_trials=100, timeout=252000, callbacks=[lambda study, trial: save_state(study, storage_name, study_name)])
-        study.optimize(objective, n_trials=100, timeout=252000, callbacks=[save_state])
+        study.optimize(objective, n_trials=100, timeout=504000, callbacks=[save_state]) # 504000 - 140 hrs
     finally:
         # Make sure state is saved at the end of the optimization
         save_state(study, None)
