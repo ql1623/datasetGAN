@@ -144,12 +144,19 @@ if __name__ == "__main__":
     scheduler_disc = optim.lr_scheduler.LambdaLR(opt_disc, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
     scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
 
-    criterion_GAN = nn.BCEWithLogitsLoss()
+    criterion_GAN_BCE = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
-    criterion_L1_GAN = L1LossWithAttention()
-    # criterion_L2 = nn.MSELoss()
-    criterion_GDL = GradientDifferenceLoss()
-    criterion_SEG = nn.BCELoss()
+    criterion_GAN_L1 = nn.L1Loss()
+    criterion_GAN_L1_ATT = L1LossWithAttention()
+    criterion_GAN_L2 = nn.MSELoss()
+    criterion_GAN_L2_ATT = L2LossWithAttention()
+    filter_type = options.GDL_TYPE
+    if filter_type == "sobel" or "prewitt":
+        criterion_GDL = GradientDifferenceLoss(filter_type=options.GDL_TYPE)
+    elif filter_type == "canny":
+        criterion_GDL = GradientDifferenceLossCanny()
+    criterion_SEG_BCE = nn.BCELoss()
+    criterion_SEG_DICE = DiceLoss(epsilon=1e-6)
     
     dataset_version = options.DATASET_VERSION
     if dataset_version == 1:
@@ -226,11 +233,11 @@ if __name__ == "__main__":
             opt_disc.zero_grad()
             pred_disc_fake = disc(target_fake.detach(), target_labels) # as dont want to backward this 
 
-            loss_D_fake = criterion_GAN(pred_disc_fake, torch.zeros_like(pred_disc_fake)) # D(G(x))
+            loss_D_fake = criterion_GAN_BCE(pred_disc_fake, torch.zeros_like(pred_disc_fake)) # D(G(x))
             
             # -- Disc loss for real --
             pred_disc_real = disc(real_target_C, target_labels)
-            loss_D_real = criterion_GAN(pred_disc_real, torch.ones_like(pred_disc_real)) # D(x)
+            loss_D_real = criterion_GAN_BCE(pred_disc_real, torch.ones_like(pred_disc_real)) # D(x)
             
             # get both loss and backprop
             loss_D = (loss_D_fake + loss_D_real) / 2
@@ -242,7 +249,7 @@ if __name__ == "__main__":
             # loss for segmentation
             set_require_grad(disc, False)
             opt_seg.zero_grad()
-            loss_S = criterion_SEG(seg_target_fake, real_seg) * options.LAMBDA_SEG # S(G(x))
+            loss_S = criterion_SEG_BCE(seg_target_fake, real_seg) * options.LAMBDA_SEG # S(G(x))
             loss_S.backward(retain_graph=True)
             opt_seg.step()
             # print("seg")
@@ -253,9 +260,9 @@ if __name__ == "__main__":
             pred_disc_fake = disc(target_fake, target_labels) # D(G(x))
             
             # loss for GAN
-            loss_G_BCE = criterion_GAN(pred_disc_fake, torch.ones_like(pred_disc_fake))
+            loss_G_BCE = criterion_GAN_BCE(pred_disc_fake, torch.ones_like(pred_disc_fake))
             # loss_G_L1 = criterion_L1(target_fake, real_target_C) 
-            loss_G_L1 = criterion_L1_GAN(target_fake, real_target_C, seg_target_fake.detach()) 
+            loss_G_L1 = criterion_GAN_L1(target_fake, real_target_C, seg_target_fake.detach()) 
             
             # loss for reconstucting unet
             loss_G_reconA = criterion_L1(image_A_recon, image_A)
@@ -263,12 +270,9 @@ if __name__ == "__main__":
             
             # loss for gradient difference between pred and real
             loss_G_GDL = criterion_GDL(target_fake, real_target_C)
-                        
-            # options.LAMBDA_BCE = 10
-            # options.LAMBDA_RECON = 1
-            
+
             # loss_G = 20*loss_G_BCE + 100*loss_G_L1 + 20*loss_G_reconA + 20*loss_G_reconB 
-            loss_G = options.LAMBDA_BCE*loss_G_BCE + options.LAMBDA_GAN_L1*loss_G_L1 + options.LAMBDA_RECON*loss_G_reconA + options.LAMBDA_RECON*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL
+            loss_G = options.LAMBDA_BCE*loss_G_BCE + options.LAMBDA_GAN_L1*loss_G_L1 + options.LAMBDA_RECON_A*loss_G_reconA + options.LAMBDA_RECON_B*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL
             loss_G.backward()
             opt_gen.step()
             # print("gen")
@@ -282,6 +286,8 @@ if __name__ == "__main__":
                 "batch": index+1,
                 "G_GAN": loss_G_BCE.item(),
                 "G_L1": loss_G_L1.item(),
+                "G_reA": loss_G_reconA.item(),
+                "G_reB": loss_G_reconB.item(),
                 "G_GDL": loss_G_GDL.item(),
                 "D_real": loss_D_real.item(),
                 "D_fake": loss_D_fake.item(),

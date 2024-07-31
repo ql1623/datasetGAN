@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torchsummary import summary
 
+"""Have Segmentation Network together and inside GAN, same architecture as GAN"""
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, act_fn="leaky", norm="batch", use_dropout=False):
@@ -373,79 +374,112 @@ class datasetGAN(nn.Module):
         
         # condition part
         if self.version == 1:
-            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=16, num_output_comb=3, is_linear=True)
             self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         elif self.version == 2:
-            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=16, num_output_comb=3, is_linear=True)
             self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         elif self.version == 3:
-            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=8, num_output_comb=3, is_linear=True)
+            self.cond = ConditionalBlock(in_channels=3, out_channels=self.features*8, feat_img_size=16, num_output_comb=3, is_linear=True)
             self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
         elif self.version == 4:
-            self.cond_v2 = ConditionalBlock_v2(in_channels=1, out_channels=self.features*8, feat_img_size=8, is_separate=True)
+            self.cond_v2 = ConditionalBlock_v2(in_channels=1, out_channels=self.features*8, feat_img_size=16, is_separate=True)
             self.fusion0 = FusionBlock_with_cond(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", is_separate=True)
         elif self.version == 5:
-            self.cond_v2 = ConditionalBlock_v2(in_channels=3, out_channels=self.features*8, feat_img_size=8, is_separate=False)
+            self.cond_v2 = ConditionalBlock_v2(in_channels=3, out_channels=self.features*8, feat_img_size=16, is_separate=False)
             self.fusion0 = FusionBlock_with_cond(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", is_separate=False)
         else:
             raise Exception("version specified is wrong")
         
         # self.fusion0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch", initial=True)
-        self.fusion_up0 = SamplingBlock(self.features*8, self.features*8, down=False, act_fn="relu", norm="batch", use_dropout=False)
+        self.fusion_up0 = SamplingBlock(self.features*8, self.features*8, down=False, act_fn="leaky", norm="batch", use_dropout=False)
         
-        self.fusion1 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="relu", norm="batch")
-        self.fusion_conv1 = ConvBlock(self.features*8*2, self.features*8, act_fn="relu", norm="batch", use_dropout=False)
-        self.fusion_up1 = SamplingBlock(self.features*8, self.features*4, down=False, act_fn="relu", norm="batch", use_dropout=False)
+        self.fusion1 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="leaky", norm="batch")
+        self.fusion_conv1 = ConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+        self.fusion_up1 = SamplingBlock(self.features*8, self.features*4, down=False, act_fn="leaky", norm="batch", use_dropout=False)
         
-        self.fusion2 = FusionBlock(self.features*4, self.features*4, groups=self.features*4, act_fn="relu", norm="batch")
-        self.fusion_conv2 = ConvBlock(self.features*4*2, self.features*4, act_fn="relu", norm="batch", use_dropout=False)
-        self.fusion_up2 = SamplingBlock(self.features*4, self.features*2, down=False, act_fn="relu", norm="batch", use_dropout=False)
+        self.fusion2 = FusionBlock(self.features*4, self.features*4, groups=self.features*4, act_fn="leaky", norm="batch")
+        self.fusion_conv2 = ConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+        self.fusion_up2 = SamplingBlock(self.features*4, self.features*2, down=False, act_fn="leaky", norm="batch", use_dropout=False)
         
-        self.fusion3 = FusionBlock(self.features*2, self.features*2, groups=self.features*2, act_fn="relu", norm="batch")
-        self.fusion_conv3 = ConvBlock(self.features*2*2, self.features*2, act_fn="relu", norm="batch", use_dropout=False)
-        self.fusion_up3 = SamplingBlock(self.features*2, self.features*1, down=False, act_fn="relu", norm="batch", use_dropout=False)
+        self.fusion3 = FusionBlock(self.features*2, self.features*2, groups=self.features*2, act_fn="leaky", norm="batch")
+        self.fusion_conv3 = ConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+        self.fusion_up3 = SamplingBlock(self.features*2, self.features*1, down=False, act_fn="leaky", norm="batch", use_dropout=False)
         
-        self.fusion4 = FusionBlock(self.features*1, self.features*1, groups=self.features*1, act_fn="relu", norm="batch")
-        self.fusion_conv4 = ConvBlock(self.features*2*1, self.features*1, act_fn="relu", norm="batch", use_dropout=False)
+        self.fusion4 = FusionBlock(self.features*1, self.features*1, groups=self.features*1, act_fn="leaky", norm="batch")
+        self.fusion_conv4 = ConvBlock(self.features*2*1, self.features*1, act_fn="leaky", norm="batch", use_dropout=False)
 
         # whether to add one more conv so input to seg is lower 
         # self.fusion_conv5 = ConvBlock(self.features, out_channels=16, act_fn="relu", norm="batch", use_dropout=False)
-
+        # -----------
+        # self.fusion_final_conv1 = ConvBlock(self.features, self.pre_output_channels, act_fn="relu", norm="batch", use_dropout=False)
+        
+        # self.fusion_final_conv2 = nn.Sequential(
+        #     # nn.Conv2d(self.features, self.features/2, kernel_size=3, stride=1, padding=1),
+        #     # nn.ReLU(inplace=True)
+        #     nn.Conv2d(self.pre_output_channels, self.output_channels, kernel_size=3, stride=1, padding=1),
+        #     nn.Tanh()
+        # )
+        #  --- or ---
         self.fusion_final_conv = nn.Sequential(
             # nn.Conv2d(self.features, self.features/2, kernel_size=3, stride=1, padding=1),
             # nn.ReLU(inplace=True)
-            nn.Conv2d(self.features, self.input_channels, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(self.features, self.output_channels, kernel_size=3, stride=1, padding=1),
             nn.Tanh()
         )
         
         # segmentation network
-        # no initial conv as use feat before finalconv of fusion
-        self.seg_conv_1 = DoubleConvBlock(self.features, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
-        self.seg_down_1 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.seg_conv_2 = DoubleConvBlock(self.features*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
-        self.seg_down_2 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.seg_conv_3 = DoubleConvBlock(self.features*4, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
-        self.seg_down_3 = nn.MaxPool2d(kernel_size=2, stride=2)
-
-        self.seg_bottleneck = nn.Sequential(
-            nn.Conv2d(self.features*8, self.features*8*2, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(self.features*8*2),    
-            nn.LeakyReLU(0.2, inplace=True),
-        )
+        # using version 2 here for seg_cond and seg_fuse0
+        self.seg_cond = ConditionalBlock(in_channels=3, out_channels=self.features*8*2, feat_img_size=16, num_output_comb=3, is_linear=True)
+        self.seg_fuse0 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="leaky", norm="batch", initial=True)
+        self.seg_up0 = SamplingBlock(self.features*8, self.features*8, down=False, act_fn="leaky", norm="batch", use_dropout=False)
         
-        self.seg_up_1 = nn.ConvTranspose2d(self.features*8*2, self.features*8, kernel_size=2, stride=2)
-        self.seg_upconv_1 = DoubleConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_fuse1 = FusionBlock(self.features*8, self.features*8, groups=self.features*8, act_fn="leaky", norm="batch")
+        self.seg_conv1 = ConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_up1 = SamplingBlock(self.features*8, self.features*4, down=False, act_fn="leaky", norm="batch", use_dropout=False)
+        
+        self.seg_fuse2 = FusionBlock(self.features*4, self.features*4, groups=self.features*4, act_fn="leaky", norm="batch")
+        self.seg_conv2 = ConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_up2 = SamplingBlock(self.features*4, self.features*2, down=False, act_fn="leaky", norm="batch", use_dropout=False)
+        
+        self.seg_fuse3 = FusionBlock(self.features*2, self.features*2, groups=self.features*2, act_fn="leaky", norm="batch")
+        self.seg_conv3 = ConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+        self.seg_up3 = SamplingBlock(self.features*2, self.features*1, down=False, act_fn="leaky", norm="batch", use_dropout=False)
+        
+        self.seg_fuse4 = FusionBlock(self.features*1, self.features*1, groups=self.features*1, act_fn="leaky", norm="batch")
+        self.seg_conv4 = ConvBlock(self.features*2*1, self.features*1, act_fn="leaky", norm="batch", use_dropout=False)
+        
+        self.seg_final_conv = nn.Sequential(
+            nn.Conv2d(self.features, self.output_channels, kernel_size=1, stride=1),
+            nn.Sigmoid(),
+        )
+        # no initial conv as use feat before finalconv of fusion
+        # self.seg_conv_1 = DoubleConvBlock(self.features, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+        # self.seg_down_1 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.seg_up_2 = nn.ConvTranspose2d(self.features*8, self.features*4, kernel_size=2, stride=2)
-        self.seg_upconv_2 = DoubleConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+        # self.seg_conv_2 = DoubleConvBlock(self.features*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+        # self.seg_down_2 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.seg_up_3 = nn.ConvTranspose2d(self.features*4, self.features*2, kernel_size=2, stride=2)
-        self.seg_upconv_3 = DoubleConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+        # self.seg_conv_3 = DoubleConvBlock(self.features*4, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+        # self.seg_down_3 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=3, stride=1, padding=1)
-        # self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=1, stride=1, padding=1)
+        # self.seg_bottleneck = nn.Sequential(
+        #     nn.Conv2d(self.features*8, self.features*8*2, kernel_size=3, stride=1, padding=1),
+        #     nn.BatchNorm2d(self.features*8*2),    
+        #     nn.LeakyReLU(0.2, inplace=True),
+        # )
+        
+        # self.seg_up_1 = nn.ConvTranspose2d(self.features*8*2, self.features*8, kernel_size=2, stride=2)
+        # self.seg_upconv_1 = DoubleConvBlock(self.features*8*2, self.features*8, act_fn="leaky", norm="batch", use_dropout=False)
+
+        # self.seg_up_2 = nn.ConvTranspose2d(self.features*8, self.features*4, kernel_size=2, stride=2)
+        # self.seg_upconv_2 = DoubleConvBlock(self.features*4*2, self.features*4, act_fn="leaky", norm="batch", use_dropout=False)
+
+        # self.seg_up_3 = nn.ConvTranspose2d(self.features*4, self.features*2, kernel_size=2, stride=2)
+        # self.seg_upconv_3 = DoubleConvBlock(self.features*2*2, self.features*2, act_fn="leaky", norm="batch", use_dropout=False)
+
+        # self.seg_final_conv = nn.Conv2d(self.features*2, self.output_channels, kernel_size=3, stride=1, padding=1)
+        # # self.seg_final_conv = nn.Conv2d(self.features*2, 1, kernel_size=1, stride=1, padding=1)
         
     def forward(self, inputs, condition):
         # import pdb; pdb.set_trace()
@@ -587,32 +621,27 @@ class datasetGAN(nn.Module):
         out_fusion = self.fusion_final_conv(fusion_merge4)
         # out_fusion = self.fusion_final_conv(fusion_merge3)
         
-        # segmentation branch 
-        seg_skip_connection = []
-        seg_conv_fu1 = self.seg_conv_1(fusion_merge4)
-        seg_skip_connection.append(seg_conv_fu1)
-        seg_down_fu1 = self.seg_down_1(seg_conv_fu1)
+        # ---- segmentation branch  ----
+        seg_condition_feat = self.seg_cond(condition)
+        seg_fu0 = self.seg_fuse0(bottleneck_x1 + seg_condition_feat[:, 0:self.features*8, :, :], bottleneck_x2 + seg_condition_feat[:, self.features*8:, :, :])
+        seg_fu_upsamp0 = self.seg_up0(seg_fu0)
         
-        seg_conv_fu2 = self.seg_conv_2(seg_down_fu1)
-        seg_skip_connection.append(seg_conv_fu2)
-        seg_down_fu2 = self.seg_down_2(seg_conv_fu2)
+        seg_fu1 = self.seg_fuse1(upconv1_x1, upconv1_x2)
+        seg_fu_merge1 = self.seg_conv1(torch.cat((seg_fu1,seg_fu_upsamp0),dim=1))
+        seg_fu_upsamp1 = self.seg_up1(seg_fu_merge1)
         
-        seg_conv_fu3 = self.seg_conv_3(seg_down_fu2)
-        seg_skip_connection.append(seg_conv_fu3)
-        seg_down_fu3 = self.seg_down_3(seg_conv_fu3)
+        seg_fu2 = self.seg_fuse2(upconv2_x1, upconv2_x2)
+        seg_fu_merge2 = self.seg_conv2(torch.cat((seg_fu2,seg_fu_upsamp1),dim=1))
+        seg_fu_upsamp2 = self.seg_up2(seg_fu_merge2)
         
-        seg_bottleneck_fu = self.seg_bottleneck(seg_down_fu3)
+        seg_fu3 = self.seg_fuse3(upconv3_x1, upconv3_x2)
+        seg_fu_merge3 = self.seg_conv3(torch.cat((seg_fu3,seg_fu_upsamp2),dim=1))
+        seg_fu_upsamp3 = self.seg_up3(seg_fu_merge3)
         
-        seg_up_fu1 = self.seg_up_1(seg_bottleneck_fu)
-        seg_upconv_fu1 = self.seg_upconv_1(torch.cat((seg_up_fu1, seg_skip_connection[2]), dim=1))
+        seg_fu4 = self.seg_fuse4(upconv4_x1, upconv4_x2)
+        seg_fu_merge4 = self.seg_conv4(torch.cat((seg_fu4,seg_fu_upsamp3),dim=1))
         
-        seg_up_fu2 = self.seg_up_2(seg_upconv_fu1)
-        seg_upconv_fu2 = self.seg_upconv_2(torch.cat((seg_up_fu2, seg_skip_connection[1]), dim=1))
-        
-        seg_up_fu3 = self.seg_up_3(seg_upconv_fu2)
-        seg_upconv_fu3 = self.seg_upconv_3(torch.cat((seg_up_fu3, seg_skip_connection[0]), dim=1))
-        
-        seg_output = torch.sigmoid(self.seg_final_conv(seg_upconv_fu3))
+        seg_output = self.seg_final_conv(seg_fu_merge4)
         
         return out_fusion, out_x1, out_x2, seg_output
  
@@ -651,7 +680,7 @@ class Discriminator(nn.Module):
         """
         super(Discriminator, self).__init__()
 
-        self.cond = ConditionalBlock(3, out_channels=1, feat_img_size=128, num_output_comb=3, has_act_fn=False, is_linear=True)
+        self.cond = ConditionalBlock(3, out_channels=1, feat_img_size=256, num_output_comb=3, has_act_fn=False, is_linear=True)
         
         self.intitial_conv = nn.Sequential(
             nn.Conv2d(in_channels + 1, features[0], kernel_size=3, stride=2, padding=1),
@@ -688,7 +717,7 @@ def test():
     # print(pred_x2.shape)
     # print(preds_disc.shape)
 
-    model = datasetGAN(1,1,32, version=4)
+    model = datasetGAN(1,1,32, version=2)
     summary(model, [(2, 128, 128),  (3, )]) 
     
     # model = Discriminator(in_channels=1, features=[32,64,128,256,512])
@@ -818,13 +847,13 @@ if __name__ == "__main__":
 # Params size (MB): 56.04
 # Estimated Total Size (MB): 199.67
 
-# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 1 with seg
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 1 with seg_v2
 
-# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 2 with seg
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 2 with seg_v2
 
-# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 3 with seg
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, version 3 with seg_v2
 
-# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using concat, version 4 with seg
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using concat, version 4 with seg_v2
 # Total params: 20,049,988
 # Trainable params: 20,049,988
 # Non-trainable params: 0
@@ -835,4 +864,26 @@ if __name__ == "__main__":
 # Params size (MB): 76.48
 # Estimated Total Size (MB): 348.23
 
-# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using concat, version 5 with seg
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using concat, version 5 with seg_v2
+# (same parmas val as gan_v4 actually )
+# Total params: 20,049,988
+# Trainable params: 20,049,988
+# Non-trainable params: 0
+# Total mult-adds (G): 20.48
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 271.62
+# Params size (MB): 76.48
+# Estimated Total Size (MB): 348.23
+
+# current model with fusing at decoder only and unet of 32 feat at start 4 layers of unet with condition at first fusion using add, 
+# (seg_v3 where same branch archi as gen decoder)
+# Total params: 18,265,092
+# Trainable params: 18,265,092
+# Non-trainable params: 0
+# Total mult-adds (G): 13.51
+# ==========================================================================================
+# Input size (MB): 0.13
+# Forward/backward pass size (MB): 189.25
+# Params size (MB): 69.68
+# Estimated Total Size (MB): 259.05

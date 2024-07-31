@@ -108,7 +108,7 @@ if __name__ == "__main__":
         if options.CONDITION_METHOD == "concat":
             import model.cgan.generator_unet4_cgan as models
         elif options.CONDITION_METHOD == "add": # not concat but add
-            import model.cgan.generator_unet4_cgan_v2_seg as models  
+            import model.cgan.generator_unet4_cgan_v2_seg_v1 as models  
         else:  
             raise Exception("Condition method in GAN is not one of the predefined options")
     else:
@@ -242,11 +242,9 @@ if __name__ == "__main__":
             
             # loss for segmentation
             loss_G_seg = criterion_SEG(seg_target_fake, real_seg)
-            # options.LAMBDA_BCE = 10
-            # options.LAMBDA_RECON = 1
-            
+
             # loss_G = 20*loss_G_BCE + 100*loss_G_L1 + 20*loss_G_reconA + 20*loss_G_reconB 
-            loss_G = options.LAMBDA_BCE*loss_G_BCE + loss_G_L1 + options.LAMBDA_RECON*loss_G_reconA + options.LAMBDA_RECON*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL + options.LAMBDA_SEG*loss_G_seg
+            loss_G = options.LAMBDA_BCE*loss_G_BCE + loss_G_L1 + options.LAMBDA_RECON_A*loss_G_reconA + options.LAMBDA_RECON_B*loss_G_reconB + options.LAMBDA_GDL*loss_G_GDL + options.LAMBDA_SEG*loss_G_seg
             loss_G.backward()
             opt_gen.step()
 
