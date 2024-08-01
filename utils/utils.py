@@ -98,7 +98,7 @@ class CannyNet(nn.Module):
         self.directional_filter.weight.data.copy_(torch.from_numpy(all_filters[:, None, ...]))
         self.directional_filter.bias.data.copy_(torch.from_numpy(np.zeros(shape=(all_filters.shape[0],))))
 
-        hysteresis = np.ones((3, 3)) + 0.25
+        hysteresis = torch.tensor([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=torch.float32) + 0.25
         self.hysteresis = nn.Conv2d(in_channels=1, out_channels=1, kernel_size=3, padding=1, bias=False)
         with torch.no_grad():
             self.hysteresis.weight[:] = torch.from_numpy(hysteresis)
@@ -113,9 +113,11 @@ class CannyNet(nn.Module):
         
         batch_size, _, height, width = img.size()
 
+        # Noise reduction
         blur_horizontal = self.gaussian_filter_horizontal(img)
         blurred_img = self.gaussian_filter_vertical(blur_horizontal)
 
+        # Gradient calculation
         grad_x_r = self.sobel_filter_horizontal(blurred_img)
         grad_y_r = self.sobel_filter_vertical(blurred_img)
 
@@ -124,6 +126,7 @@ class CannyNet(nn.Module):
         grad_orientation = (torch.atan2(grad_y_r, grad_x_r) * (180.0 / 3.14159)) + 180.0
         grad_orientation = torch.round(grad_orientation / 45.0) * 45.0
 
+        # Non-maximum suppression
         all_filtered = self.directional_filter(grad_mag)
 
         indices_positive = (grad_orientation / 45) % 8
@@ -144,6 +147,10 @@ class CannyNet(nn.Module):
         thin_edges = grad_mag.clone()
         thin_edges[is_max == 0] = 0.0
 
+        # Double threshold
+        
+        # Edge Tracking by Hysteresis
+        
         # thresholded = thin_edges.clone()
         # thresholded[thin_edges < self.threshold] = 0.0
 
@@ -158,13 +165,175 @@ class CannyNet(nn.Module):
 
         return thin_edges
 
+class CannyEdge(nn.Module):
+    def __init__(self, sigma=1, kernel_size=5, weak_pixel=75, strong_pixel=255, low_threshold=0.00392, high_threshold=0.15, use_hysteresis=True):
+        super(CannyEdge, self).__init__()
+
+        self.weak_pixel = weak_pixel
+        self.strong_pixel = strong_pixel
+        self.low_threshold = low_threshold
+        self.high_threshold = high_threshold
+        self.use_hysteresis = use_hysteresis
+        self.kernel_size = kernel_size
+        self.sigma = sigma
+        
+    def noise_removal(self, kernel_size, sigma, img):
+        device = img.device
+        generated_filters = gaussian(kernel_size, std=sigma).reshape([1, kernel_size]).astype(np.float32)
+        gaussian_filter_horizontal = torch.from_numpy(generated_filters).unsqueeze(0).unsqueeze(0).to(device)
+        gaussian_filter_vertical = torch.from_numpy(generated_filters.T).unsqueeze(0).unsqueeze(0).to(device)
+        with torch.no_grad():
+            smoothed_img = F.conv2d(img, gaussian_filter_horizontal, padding=(0, kernel_size // 2))
+            smoothed_img = F.conv2d(smoothed_img, gaussian_filter_vertical, padding=(kernel_size // 2, 0))
+            
+        return smoothed_img
+
+    def grad_calc(self, smoothed_img):
+        B = smoothed_img.shape[0]
+        device = smoothed_img.device
+        
+        sobel_filter = torch.tensor([[1, 0, -1],
+                                     [2, 0, -2],
+                                     [1, 0, -1]], dtype=torch.float32).to(device)
+        sobel_filter_horizontal = sobel_filter.unsqueeze(0).unsqueeze(0).to(device)
+        sobel_filter_vertical = sobel_filter.t().unsqueeze(0).unsqueeze(0).to(device)
+        with torch.no_grad():
+            Ix = F.conv2d(smoothed_img, sobel_filter_horizontal, padding=1)
+            Iy = F.conv2d(smoothed_img, sobel_filter_vertical, padding=1)
+
+        grad_mag = torch.sqrt(Ix ** 2 + Iy ** 2)
+        grad_mag /= grad_mag.view(B, -1).max(dim=1, keepdim=True)[0].view(B, 1, 1, 1)
+        # grad_mag = grad_mag / (grad_mag.view(B, 1, -1).max(dim=2)[0].view(B, 1, 1, 1))
+        grad_direction = (torch.atan2(Iy, Ix) * (180.0 / 3.1415926)) + 180
+        grad_direction = torch.round(grad_direction / 45.0) * 45.0
+        
+        return (grad_mag, grad_direction)
     
+    def non_max_suppression(self, grad_mag, grad_direction):
+        B, C, H, W = grad_mag.shape
+        device = grad_mag.device
+        # filters were flipped manually
+        filter_0 = np.array([[0, 0, 0],
+                            [0, 1, -1],
+                            [0, 0, 0]], dtype=np.float32)
+
+        filter_45 = np.array([[0, 0, 0],
+                            [0, 1, 0],
+                            [0, 0, -1]], dtype=np.float32)
+
+        filter_90 = np.array([[0, 0, 0],
+                            [0, 1, 0],
+                            [0, -1, 0]], dtype=np.float32)
+
+        filter_135 = np.array([[0, 0, 0],
+                            [0, 1, 0],
+                            [-1, 0, 0]], dtype=np.float32)
+
+        filter_180 = np.array([[0, 0, 0],
+                            [-1, 1, 0],
+                            [0, 0, 0]], dtype=np.float32)
+
+        filter_225 = np.array([[-1, 0, 0],
+                            [0, 1, 0],
+                            [0, 0, 0]], dtype=np.float32)
+
+        filter_270 = np.array([[0, -1, 0],
+                            [0, 1, 0],
+                            [0, 0, 0]], dtype=np.float32)
+
+        filter_315 = np.array([[0, 0, -1],
+                            [0, 1, 0],
+                            [0, 0, 0]], dtype=np.float32)
+
+        all_filters = np.stack([filter_0, filter_45, filter_90, filter_135, filter_180, filter_225, filter_270, filter_315])
+        directional_filter = torch.from_numpy(all_filters).unsqueeze(1).to(device)
+        with torch.no_grad():
+            all_filtered = F.conv2d(grad_mag, directional_filter, padding=1)
+
+        indices_positive = (grad_direction / 45).long() % 8
+        indices_negative = (indices_positive + 4) % 8
+
+        indices_positive = indices_positive.view(B, 1, -1)
+        indices_negative = indices_negative.view(B, 1, -1)
+
+        all_filtered_flat = all_filtered.view(B, 8, -1)
+        channel_select_filtered_positive = all_filtered_flat.gather(1, indices_positive.view(B, 1, -1)).view(B, 1, H, W)
+        channel_select_filtered_negative = all_filtered_flat.gather(1, indices_negative.view(B, 1, -1)).view(B, 1, H, W)
+
+        # is_max = torch.min(channel_select_filtered_positive, channel_select_filtered_negative) == grad_mag
+
+        # thin_edges = grad_mag.clone()
+        # thin_edges[~is_max] = 0.0
+        channel_select_filtered = torch.stack([channel_select_filtered_positive, channel_select_filtered_negative], dim=1)
+
+        is_max = channel_select_filtered.min(dim=1)[0] > 0.0
+        is_max = is_max.view(B, 1, H, W)
+
+        thin_edges = grad_mag.clone()
+        thin_edges[is_max == 0] = 0.0  # [1,1,h,w]
+        
+        return thin_edges
+
+    def hysteresis(self, intermediate_threshold):
+        device = intermediate_threshold.device
+        
+        strong_neighbours = torch.tensor([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=torch.float32).to(device)
+        strong_filter = strong_neighbours.unsqueeze(0).unsqueeze(0).to(device)
+        while True:
+                weak_mask = intermediate_threshold == self.weak_pixel
+                strong_neighbors = F.conv2d((intermediate_threshold == self.strong_pixel).float(), strong_filter, padding=1)
+                new_strong = weak_mask & (strong_neighbors > 0)
+                if not new_strong.any():
+                    break
+                intermediate_threshold[new_strong] = self.strong_pixel
+
+        final_edges = intermediate_threshold.clone()
+        final_edges[final_edges != self.strong_pixel] = 0
+        
+        return final_edges
+    
+    def forward(self, img):
+        B, C, H, W = img.shape
+
+        device = img.device
+
+        # Noise Reduction
+        smoothed_img = self.noise_removal(self.kernel_size, self.sigma, img)
+
+        # Gradient calculation
+        grad_mag, grad_direction = self.grad_calc(smoothed_img)
+        
+        # Non-maximum suppression
+        thin_edges = self.non_max_suppression(grad_mag, grad_direction)
+        
+        # Double threshold
+        high_threshold = thin_edges.max() * self.high_threshold
+
+        strong_edges = thin_edges >= high_threshold
+        weak_edges = (thin_edges < high_threshold) & (thin_edges >= self.low_threshold)
+
+        intermediate_threshold = torch.zeros_like(thin_edges)
+        intermediate_threshold[strong_edges] = self.strong_pixel
+        intermediate_threshold[weak_edges] = self.weak_pixel
+
+        # Hysteresis
+        if self.use_hysteresis:
+            final_edges = self.hysteresis(intermediate_threshold)
+            
+        else:
+            final_edges = intermediate_threshold[strong_edges]
+
+        # return smoothed_img, grad_mag, grad_direction, thin_edges, intermediate_threshold, final_edges
+        return final_edges
+
+
 class GradientDifferenceLossCanny(nn.Module):
-    def __init__(self, canny_threshold=15.0, use_cuda=False):
+    def __init__(self, low_threshold=0.00392, high_threshold=0.15):# , use_cuda=False
         super(GradientDifferenceLossCanny, self).__init__()
-        self.canny_threshold = canny_threshold
-        self.use_cuda = use_cuda
-        self.canny_net = CannyNet(threshold=self.canny_threshold, use_cuda=self.use_cuda)
+        self.low_threshold = low_threshold
+        self.high_threshold = high_threshold
+        # self.use_cuda = use_cuda
+        self.canny_net = CannyEdge(sigma=1, kernel_size=5, weak_pixel=75, strong_pixel=255, low_threshold=self.low_threshold, high_threshold=self.high_threshold, use_hysteresis=True)
         
     def forward(self, pred, target):
         # Initialize lists to hold edge maps for each image in the batch

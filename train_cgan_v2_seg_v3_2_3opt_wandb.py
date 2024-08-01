@@ -27,9 +27,9 @@ from dataset_png_v3_seg_v2 import MRI_dataset
 from train_options_v2 import TrainOptions
 
 """Have Segmentation Network together and inside GAN, same architecture as GAN to see
-   generate 2 times, training with 2 pass on same optimiser, 1st pass: seg opt, 2nd pass: disc opt and gan opt
-   gan and seg = same optimiser, update seg -> update disc -> update gan
-   gan use seg_target_fake of second pass
+   generate 1 time, training with 1 pass on each opt, 1st pass: disc opt -> seg opt -> and gan opt
+   gan and seg = different optimiser on same net but take out different params, 
+   update disc -> update seg -> update gan
    removed other dataset version as will be using version 4 anyways""" 
    
 if __name__ == "__main__":
@@ -73,15 +73,19 @@ if __name__ == "__main__":
     # initialize weights inside
     # gen.apply(initialize_weights)
     # disc.apply(initialize_weights)
-    
+    seg_params = [param for name, param in gen.named_parameters() if 'seg' in name]
+    gen_params = [param for name, param in gen.named_parameters() if 'seg' not in name]
+
     opt_disc = optim.Adam(disc.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2)) 
-    opt_gen = optim.Adam(gen.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
-    # opt_seg = optim.Adam(seg.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
+    # opt_gen = optim.Adam(gen.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
+    # opt_seg = optim.Adam(gen.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
+    opt_gen = optim.Adam(gen_params, lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
+    opt_seg = optim.Adam(seg_params, lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
     
     # learning rate decay
     scheduler_gen = optim.lr_scheduler.LambdaLR(opt_gen, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
     scheduler_disc = optim.lr_scheduler.LambdaLR(opt_disc, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
-    # scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
+    scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
 
     criterion_GAN_BCE = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
@@ -124,39 +128,10 @@ if __name__ == "__main__":
                 
             x_concat = torch.cat((image_A, image_B), dim=1)
             # generate
-            # target_fake, image_A_recon, image_B_recon, seg_target_fake = gen(x_concat, target_labels) # first pass with seg so need seg_target_fake
-            _, _, _, seg_target_fake = gen(x_concat, target_labels) # first pass with seg so need seg_target_fake
+            target_fake, image_A_recon, image_B_recon, seg_target_fake = gen(x_concat, target_labels) # 1 pass with only so need all
+            # _, _, _, seg_target_fake = gen(x_concat, target_labels) # first pass with seg so need seg_target_fake
             # segment
             # seg_target_fake = seg(fusion_features)
-            
-            # ----- backward of seg that is in the GAN now ----- 
-            # loss for segmentation
-            set_require_grad(disc, False)
-            # opt_seg.zero_grad()
-            # loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
-            # loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
-            # loss_S = options.LAMBDA_SEG_BCE * loss_S_BCE + options.LAMBDA_SEG_DICE * loss_S_DICE
-            # loss_S.backward(retain_graph=True)
-            # opt_seg.step()
-            # print("seg")
-            
-            # ==== First pass of gen (for segment branch) ====            
-            # loss for segmentation branch
-            opt_gen.zero_grad()
-            
-            # loss for correct labelling
-            loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
-            
-            # loss for correct labelling correct area overlapping
-            loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
-            loss_S = options.LAMBDA_SEG_BCE * loss_S_BCE + options.LAMBDA_SEG_DICE * loss_S_DICE
-            loss_S.backward(retain_graph=True)
-            opt_gen.step()
-            
-            
-            # ==== Second pass of gen (for generate branch) ====
-            # ----- get generation img and mask ----- 
-            target_fake, image_A_recon, image_B_recon, seg_target_fake = gen(x_concat, target_labels) # second pass with Gan, dont need seg_target_fake
             
             # ----- backward of disc ----- 
             # -- Disc loss for fake --
@@ -175,8 +150,19 @@ if __name__ == "__main__":
             loss_D.backward()
             opt_disc.step()
             # print("disc")
-            # ----- backward of gen ----- 
+            
+            # ----- backward of seg ----- 
+            # loss for segmentation
             set_require_grad(disc, False)
+            opt_seg.zero_grad()
+            loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
+            loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
+            loss_S = options.LAMBDA_SEG_BCE * loss_S_BCE + options.LAMBDA_SEG_DICE * loss_S_DICE
+            loss_S.backward(retain_graph=True)
+            opt_seg.step()
+            # print("seg")
+            
+            # ----- backward of gen ----- 
             opt_gen.zero_grad()
             
             pred_disc_fake = disc(target_fake, target_labels) # D(G(x))

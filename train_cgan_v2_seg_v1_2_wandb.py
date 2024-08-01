@@ -30,11 +30,11 @@ from dataset_png_v3_seg_v2 import MRI_dataset
 
 from train_options_v2 import TrainOptions
 
-"""Have Segmentation Network inside GAN, take feature layers at bottleneck instead of right before out_conv of fusion
-generate 1 time only, training with 1 pass on each of 2 optimiser, 1st pass: disc opt & (gan and seg) opt
-gan and seg = same optimiser, update disc -> update (gan and seg net) together
-
+"""Have Segmentation Network separately and not inside GAN, take feature layers at bottleneck instead of right before out_conv of fusion
+generate 1 time only, 1 pass on each of 3 optimiser, 1st pass: disc opt, seg opt, gan opt
+gan and seg = different optimiser, update disc -> update seg net -> update gan
 removed other dataset version as will be using version 4 anyways""" 
+
 def train_one_pass(options, epoch, train_loader, gen, disc, opt_gen, opt_disc, criterion_dict, lambda_dict):
     loop = tqdm(train_loader, leave=True)
     epoch_losses = []
@@ -191,7 +191,7 @@ if __name__ == "__main__":
     num_features = options.NUM_FEATURES
     # seg_num_features = options.NUM_SEG_FEATURES
     # print(f"Model architecture is {net_layer} layers, with gan = {num_features} feat, seg = {seg_num_features} feat")
-    print(f"Model architecture is {net_layer} layers, with gan = {num_features} feat, seg inside gan")
+    print(f"Model architecture is {net_layer} layers, with gan = {num_features} feat, seg use bottleneck and outside of gan")
     
     # if net_layer == 4:
     #     if options.CONDITION_METHOD == "concat":
@@ -210,17 +210,17 @@ if __name__ == "__main__":
     gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features, version=gan_version)
     # summary(gen, (2, 128, 128))
     disc = models.Discriminator(in_channels=1, features=[32,64,128,256,512])
-    # seg = models.SegmentationNetwork(input_ngf=seg_num_features, output_channels=1)
-    # seg = models.SegmentationNetwork(input_ngf=seg_num_features, output_channels=1)
+    seg = models.SegmentationNetwork(input_ngf=num_features, output_channels=1)
+
     
     if torch.cuda.device_count() > 1:
         gen = nn.DataParallel(gen, options.GPU_IDS) # DistributedDataParallel?
         disc = nn.DataParallel(disc, options.GPU_IDS)
-        # seg = nn.DataParallel(seg, options.GPU_IDS)
+        seg = nn.DataParallel(seg, options.GPU_IDS)
     
     gen.to(options.DEVICE)
     disc.to(options.DEVICE)
-    # seg.to(options.DEVICE)
+    seg.to(options.DEVICE)
         
     # initialize weights inside
     # gen.apply(initialize_weights)
@@ -228,12 +228,12 @@ if __name__ == "__main__":
     
     opt_disc = optim.Adam(disc.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2)) 
     opt_gen = optim.Adam(gen.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
-    # opt_seg = optim.Adam(seg.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
+    opt_seg = optim.Adam(seg.parameters(), lr=options.LEARNING_RATE, betas=(options.B1, options.B2))  
     
     # learning rate decay
     scheduler_gen = optim.lr_scheduler.LambdaLR(opt_gen, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
     scheduler_disc = optim.lr_scheduler.LambdaLR(opt_disc, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
-    # scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
+    scheduler_seg = optim.lr_scheduler.LambdaLR(opt_seg, lr_lambda=lambda epoch: lambda_lr(epoch, options.LR_START_EPOCH, options.NUM_EPOCHS))
 
     criterion_GAN_BCE = nn.BCEWithLogitsLoss()
     criterion_L1 = nn.L1Loss()
@@ -275,9 +275,9 @@ if __name__ == "__main__":
                 
             x_concat = torch.cat((image_A, image_B), dim=1)
             # generate
-            target_fake, image_A_recon, image_B_recon, seg_target_fake = gen(x_concat, target_labels)
+            target_fake, image_A_recon, image_B_recon, bottleneck_x1, bottleneck_x2 = gen(x_concat, target_labels)
             # segment
-            # seg_target_fake = seg(fusion_features)
+            seg_target_fake = seg(bottleneck_x1, bottleneck_x2, target_labels)
 
             
             # ----- backward of disc ----- 
@@ -298,17 +298,23 @@ if __name__ == "__main__":
             opt_disc.step()
             # print("disc")
             
-             # ----- backward of seg that is in the GAN now ----- 
+            # ----- backward of seg ----- 
             # loss for segmentation
             set_require_grad(disc, False)
+            opt_seg.zero_grad()
+            loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
+            loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
+            loss_S = options.LAMBDA_SEG_BCE * loss_S_BCE + options.LAMBDA_SEG_DICE * loss_S_DICE
+            loss_S.backward(retain_graph=True)
+            opt_seg.step()
+            # print("seg")
             
             # ----- backward of gen ----- 
             opt_gen.zero_grad()
             
             pred_disc_fake = disc(target_fake, target_labels) # D(G(x))
             
-            # # loss for GAN
-            # loss_G, losses = calculate_losses(options, pred_disc_fake, target_fake, real_target_C, seg_target_fake, image_A_recon, image_A, image_B_recon, image_B, real_seg, criterion_dict, lambda_dict):
+            # loss for GAN
             loss_G_BCE = criterion_GAN_BCE(pred_disc_fake, torch.ones_like(pred_disc_fake))
             loss_G_L1 = criterion_GAN_L1(target_fake, real_target_C) 
             
@@ -316,7 +322,7 @@ if __name__ == "__main__":
             loss_G_L2 = criterion_GAN_L2(target_fake, real_target_C) if options.USE_GAN_L2 else None
             loss_G_L1_ATT = criterion_GAN_L1_ATT(target_fake, real_target_C, seg_target_fake.detach()) if options.USE_GAN_L1_ATT else None
             loss_G_L2_ATT = criterion_GAN_L2_ATT(target_fake, real_target_C, seg_target_fake.detach()) if options.USE_GAN_L2_ATT else None
-            
+              
             # loss for reconstucting unet
             loss_G_reconA = criterion_L1(image_A_recon, image_A)
             loss_G_reconB = criterion_L1(image_B_recon, image_B)
@@ -324,14 +330,8 @@ if __name__ == "__main__":
             # loss for gradient difference between pred and real
             loss_G_GDL = criterion_GDL(target_fake, real_target_C)
             
-            # loss for segmentation decoding branch
-            loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
-            loss_S_DICE = criterion_SEG_DICE(seg_target_fake, real_seg)
-            loss_S = options.LAMBDA_SEG_BCE * loss_S_BCE + options.LAMBDA_SEG_DICE * loss_S_DICE
-            
             # loss_G = 20*loss_G_BCE + 100*loss_G_L1 + 20*loss_G_reconA + 20*loss_G_reconB 
-            loss_G = (loss_S + 
-                      options.LAMBDA_GAN_BCE * loss_G_BCE + 
+            loss_G = (options.LAMBDA_GAN_BCE * loss_G_BCE + 
                       options.LAMBDA_GAN_L1 * loss_G_L1 + 
                       options.LAMBDA_RECON_A * loss_G_reconA + 
                       options.LAMBDA_RECON_B * loss_G_reconB + 
@@ -343,11 +343,13 @@ if __name__ == "__main__":
                 loss_G += options.LAMBDA_GAN_L1_ATT * loss_G_L1_ATT
             if loss_G_L2_ATT is not None:
                 loss_G += options.LAMBDA_GAN_L2_ATT * loss_G_L2_ATT
+                    
             loss_G.backward()
             opt_gen.step()
             # print("gen")
-
-
+            
+            # --------- end of model --------- 
+            
             loop.set_description(f"Epoch [{epoch+1}/{options.NUM_EPOCHS}]: Batch [{index+1}/{len(train_loader)}]")
             loop.set_postfix(loss_G=loss_G.item(), loss_D=loss_D.item(), loss_S=loss_S.item())
             
@@ -365,6 +367,13 @@ if __name__ == "__main__":
                 "S_BCE": loss_S_BCE.item(),
                 "S_DICE": loss_S_DICE.item(),
             }
+            if loss_G_L2 is not None:
+                batch_loss_dict["G_L2"] = loss_G_L2.item()
+            if loss_G_L1_ATT is not None:
+                batch_loss_dict["G_L1_ATT"] = loss_G_L1_ATT.item()
+            if loss_G_L2_ATT is not None:
+                batch_loss_dict["G_L2_ATT"] = loss_G_L2_ATT.item()
+                
             epoch_losses.append(batch_loss_dict)
             
             log_data = {k: v for k, v in batch_loss_dict.items() if k != "batch"}
@@ -372,7 +381,7 @@ if __name__ == "__main__":
 
         scheduler_disc.step()
         scheduler_gen.step()
-        # scheduler_seg.step()
+        scheduler_seg.step()
 
         log_loss_data = [loss_G_BCE, loss_G_L1, loss_G_reconA, loss_G_reconB, loss_G_GDL, loss_D_fake, loss_D_real, loss_S_BCE, loss_S_DICE]
         log_loss_names = ["G_BCE", "G_L1", "G_reA", "G_reB", "G_GDL", "D_fake", "D_real", "S_BCE", "S_DICE"]
@@ -390,14 +399,14 @@ if __name__ == "__main__":
         log_loss_to_txt(options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, run_id, epoch+1, 
                         loss_data=log_loss_data, 
                         loss_name=log_loss_names)
-
+        
         if options.SAVE_MODEL:
             if (epoch+1) > 5 and (epoch+1) % options.CHECKPOINT_INTERVAL == 0:
             # if (epoch+1) % options.CHECKPOINT_INTERVAL == 0:
                 save_checkpoint(gen, opt_gen, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_G.pth")
                 save_checkpoint(disc, opt_disc, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_D.pth")
             # if (epoch+1) > 10 and (epoch+1) % options.CHECKPOINT_INTERVAL == 0:
-                # save_checkpoint(seg, opt_seg, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_S.pth")
+                save_checkpoint(seg, opt_seg, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_S.pth")
                 # print("checkpoint saved")
 
         # Log images to wandb at the end of each epoch

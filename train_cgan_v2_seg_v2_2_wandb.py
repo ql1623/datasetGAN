@@ -92,7 +92,7 @@ if __name__ == "__main__":
     if ("sobel" in filter_type) or ("prewitt" in filter_type):
         criterion_GDL = GradientDifferenceLoss(filter_type=options.GDL_TYPE)
     elif "canny" in filter_type:
-        criterion_GDL = GradientDifferenceLossCanny(use_cuda=torch.cuda.is_available())
+        criterion_GDL = GradientDifferenceLossCanny()
     else:
         raise Exception("filter type defined with wrong format")
     criterion_SEG_BCE = nn.BCELoss()
@@ -108,8 +108,8 @@ if __name__ == "__main__":
     parser.save_options(run_id, options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, train=True)
     # save_config(config, run_id, options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, train=True)
     
-    for epoch in range(options.NUM_EPOCHS):
-    # for epoch in range(1):
+    # for epoch in range(options.NUM_EPOCHS):
+    for epoch in range(1):
         
         loop = tqdm(train_loader, leave=True)
         epoch_losses = []
@@ -126,16 +126,7 @@ if __name__ == "__main__":
             target_fake, image_A_recon, image_B_recon, fusion_features = gen(x_concat, target_labels)
             # segment
             seg_target_fake = seg(fusion_features)
-            # print(seg_target_fake.shape)
-            # print(real_seg.shape)
-            # import pdb; pdb.set_trace()
-            # seg_target_fake_whole = patches_to_images2(seg_target_fake, [200,200], [2,2])
-        
-            # seg_target_fake_whole = seg_target_fake_whole.to('cpu')  # Move to CPU if it's on GPU
-            # # plot_probability_map(seg_target_fake)
-            # save_probability_map(seg_target_fake_whole, options.SAVE_CHECKPOINT_DIR, options.SAVE_RESULTS_DIR_NAME, filename="probability_map.npy")
-            # # reveresed_confidence_map = 1 - seg_target_fake
-            
+
             # ----- backward of disc ----- 
             # -- Disc loss for fake --
             set_require_grad(disc, True)

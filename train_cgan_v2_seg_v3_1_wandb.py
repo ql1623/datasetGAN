@@ -47,7 +47,7 @@ if __name__ == "__main__":
     net_layer = options.NUM_LAYERS
     num_features = options.NUM_FEATURES
     seg_num_features = options.NUM_SEG_FEATURES
-    print(f"Model architecture is {net_layer} layers, with gan = {num_features} feat, seg = {seg_num_features} feat")
+    print(f"Model architecture is {net_layer} layers, with gan = {num_features} feat, seg together with gan")
     
     import model.cgan.generator_unet4_cgan_v2_seg_v3 as models 
         
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     if ("sobel" in filter_type) or ("prewitt" in filter_type):
         criterion_GDL = GradientDifferenceLoss(filter_type=options.GDL_TYPE)
     elif "canny" in filter_type:
-        criterion_GDL = GradientDifferenceLossCanny(use_cuda=torch.cuda.is_available())
+        criterion_GDL = GradientDifferenceLossCanny()
     else:
         raise Exception("filter type defined with wrong format")
     criterion_SEG_BCE = nn.BCELoss()

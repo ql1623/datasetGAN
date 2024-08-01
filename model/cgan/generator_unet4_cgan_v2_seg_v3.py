@@ -709,7 +709,12 @@ def test():
     # x_disc = torch.randn((1,1,128,128))
     # disc = Discriminator(in_channels=1, features=[32,64,128,256,512])
     # ngf = 16
-    # gen = datasetGAN(1,1,ngf)
+    gen = datasetGAN(1,1,32, version=2)
+    seg_params = [param for name, param in gen.named_parameters() if 'seg' in name]
+    gen_params = [param for name, param in gen.named_parameters() if 'seg' not in name]
+    print("Segment parameters: ", seg_params)
+    print("------------------------------------------------------------")
+    print("Generator parameters: ", gen_params)
     # preds_disc = disc(x_disc)
     # preds_gen, pred_x1, pred_x2 = gen(x_gen)
     # print(preds_gen.shape)
@@ -717,8 +722,8 @@ def test():
     # print(pred_x2.shape)
     # print(preds_disc.shape)
 
-    model = datasetGAN(1,1,32, version=2)
-    summary(model, [(2, 128, 128),  (3, )]) 
+    # model = datasetGAN(1,1,32, version=2)
+    # summary(model, [(2, 128, 128),  (3, )]) 
     
     # model = Discriminator(in_channels=1, features=[32,64,128,256,512])
     # summary(model, [(1, 128, 128),  (3, )]) 
